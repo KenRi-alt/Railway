@@ -33,9 +33,11 @@ import pytz
 # ======================
 OWNER_ID = 6108185460  # Hardcoded owner ID
 BOT_TOKEN = "7869314780:AAFFU5jMv-WK9sCJnAJ4X0oRtog632B9sUg"
-WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
+WEATHER_API_KEY = "b5622fffde3852de7528ec5d71a9850a"  # Your OpenWeather API key
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3")
+LOG_CHANNEL = -1003662720845  # Your log channel ID
+WELCOME_PIC = "https://files.catbox.moe/s4k1rn.jpg"  # Your welcome picture
 
 # Initialize logging
 logging.basicConfig(
@@ -106,6 +108,28 @@ def init_database():
     return conn
 
 DB = init_database()
+
+# ======================
+# LOG CHANNEL FUNCTIONS
+# ======================
+async def log_to_channel(context: ContextTypes.DEFAULT_TYPE, message: str, photo_url: str = None):
+    """Send log message to log channel"""
+    try:
+        if photo_url:
+            await context.bot.send_photo(
+                chat_id=LOG_CHANNEL,
+                photo=photo_url,
+                caption=message,
+                parse_mode='HTML'
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL,
+                text=message,
+                parse_mode='HTML'
+            )
+    except Exception as e:
+        logger.error(f"Failed to send log to channel: {e}")
 
 # ======================
 # DATABASE FUNCTIONS
@@ -247,11 +271,22 @@ def get_stats():
     }
 
 # ======================
-# AI FUNCTIONS (Ollama)
+# AI FUNCTIONS (Ollama with Fallback)
 # ======================
 async def ask_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
-    """Query Ollama for response"""
+    """Query Ollama for response with better error handling"""
     try:
+        # First check if Ollama is running
+        async with aiohttp.ClientSession() as session:
+            try:
+                # Check Ollama status
+                async with session.get(f"{OLLAMA_URL}/api/tags", timeout=5) as check_response:
+                    if check_response.status != 200:
+                        return "❌ Ollama is not running or not accessible.\n\nTo fix this:\n1. Install Ollama from https://ollama.ai/\n2. Run: `ollama pull llama3`\n3. Run: `ollama serve`\n4. Make sure port 11434 is accessible"
+            except:
+                return "❌ Cannot connect to Ollama server.\n\nMake sure Ollama is installed and running on your machine.\nInstall from: https://ollama.ai/\n\nFor Railway deployment, you need to use a cloud Ollama service or switch to a different AI provider."
+        
+        # If Ollama is reachable, proceed with generation
         url = f"{OLLAMA_URL}/api/generate"
         payload = {
             "model": model,
@@ -270,16 +305,18 @@ async def ask_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
                     data = await response.json()
                     return data.get("response", "I apologize, but I couldn't generate a response.")
                 else:
-                    return "⚠️ Ollama is not responding. Please check if Ollama is running."
+                    return f"⚠️ Ollama returned error status: {response.status}"
+    except asyncio.TimeoutError:
+        return "⏱️ Request timed out. Ollama might be busy or the model is loading."
     except Exception as e:
         logger.error(f"Ollama error: {e}")
-        return "❌ Error connecting to Ollama. Please ensure Ollama is installed and running."
+        return "❌ Error connecting to Ollama. Please ensure Ollama is installed and running locally, or use a cloud Ollama service for deployment."
 
 # ======================
 # CURRENT DATA FUNCTIONS
 # ======================
 async def get_current_weather(city: str) -> str:
-    """Get current weather for a city"""
+    """Get current weather for a city using OpenWeatherMap"""
     if not WEATHER_API_KEY:
         return "Weather API not configured."
     
@@ -290,18 +327,66 @@ async def get_current_weather(city: str) -> str:
                 if response.status == 200:
                     data = await response.json()
                     temp = data['main']['temp']
-                    desc = data['weather'][0]['description']
+                    feels_like = data['main']['feels_like']
+                    desc = data['weather'][0]['description'].title()
                     humidity = data['main']['humidity']
-                    return f"🌤️ Weather in {city}: {temp}°C, {desc}, Humidity: {humidity}%"
+                    wind_speed = data['wind']['speed']
+                    city_name = data['name']
+                    country = data['sys']['country']
+                    
+                    # Weather emoji mapping
+                    weather_icons = {
+                        'clear': '☀️',
+                        'clouds': '☁️',
+                        'rain': '🌧️',
+                        'drizzle': '🌦️',
+                        'thunderstorm': '⛈️',
+                        'snow': '❄️',
+                        'mist': '🌫️',
+                        'fog': '🌁'
+                    }
+                    
+                    icon = '🌤️'
+                    for key, value in weather_icons.items():
+                        if key in data['weather'][0]['main'].lower():
+                            icon = value
+                            break
+                    
+                    return f"""{icon} <b>Weather in {city_name}, {country}</b>
+
+🌡️ Temperature: {temp}°C (Feels like {feels_like}°C)
+📝 Condition: {desc}
+💧 Humidity: {humidity}%
+💨 Wind Speed: {wind_speed} m/s
+📍 Location: {city_name}, {country}
+"""
+                elif response.status == 404:
+                    return f"❌ City '{city}' not found. Please check the city name."
                 else:
-                    return "Could not fetch weather data."
-    except:
-        return "Weather service unavailable."
+                    return f"⚠️ Weather service error: {response.status}"
+    except asyncio.TimeoutError:
+        return "⏱️ Weather request timed out. Please try again later."
+    except Exception as e:
+        logger.error(f"Weather API error: {e}")
+        return "❌ Could not fetch weather data at the moment."
 
 def get_current_time() -> str:
     """Get current date and time"""
     now = datetime.now()
-    return now.strftime("📅 Date: %Y-%m-%d\n⏰ Time: %H:%M:%S\n🌐 Timezone: UTC")
+    timezones = {
+        "UTC": pytz.UTC,
+        "EST": pytz.timezone('US/Eastern'),
+        "PST": pytz.timezone('US/Pacific'),
+        "GMT": pytz.timezone('GMT'),
+        "IST": pytz.timezone('Asia/Kolkata')
+    }
+    
+    time_info = "🕒 <b>Current Time</b>\n\n"
+    for tz_name, tz in timezones.items():
+        tz_time = datetime.now(tz)
+        time_info += f"• <b>{tz_name}:</b> {tz_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    
+    return time_info
 
 # ======================
 # FILE EXPORT FUNCTIONS
@@ -393,6 +478,8 @@ Generated: {timestamp}
 🕒 SYSTEM INFO:
 • Bot Owner: 6108185460
 • Organization: Tempest Creed
+• Weather API: {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}
+• Log Channel: {'✅ Configured' if LOG_CHANNEL else '❌ Not configured'}
 """
     
     filename = f"stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -405,16 +492,16 @@ Generated: {timestamp}
 # TELEGRAM BOT HANDLERS
 # ======================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Handle /start command with welcome picture"""
     user = update.effective_user
     create_user(user.id, user.username, user.first_name, user.last_name)
     
-    welcome_text = f"""🤖 *Welcome to Tempest AI!*
-    
-*Organization:* Tempest Creed
-*Status:* Private AI Research Division
+    welcome_text = f"""🤖 <b>Welcome to Tempest AI!</b>
 
-*Available Commands:*
+<b>Organization:</b> Tempest Creed
+<b>Status:</b> Private AI Research Division
+
+<b>Available Commands:</b>
 /start - Show this message
 /help - Get assistance  
 /model - Check current AI model
@@ -422,19 +509,36 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /reset - Clear conversation history
 /info - About Tempest Creed
 
-*How to use in groups:* 
+<b>How to use in groups:</b> 
 Mention "tempest" in your message and I'll reply!
 
-*Owner:* `6108185460`
-*Default Model:* `{DEFAULT_MODEL}`
+<b>Owner:</b> <code>6108185460</code>
+<b>Default Model:</b> <code>{DEFAULT_MODEL}</code>
 """
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    
+    # Send welcome picture with caption
+    await update.message.reply_photo(
+        photo=WELCOME_PIC,
+        caption=welcome_text,
+        parse_mode='HTML'
+    )
+    
+    # Log new user to channel
+    log_message = f"""🆕 <b>New User Joined</b>
+
+👤 <b>User:</b> {user.first_name} {f'({user.last_name})' if user.last_name else ''}
+🆔 <b>ID:</b> <code>{user.id}</code>
+📛 <b>Username:</b> @{user.username if user.username else 'N/A'}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+👥 <b>Total Users:</b> {len(get_all_users())}
+"""
+    await log_to_channel(context, log_message)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
-    help_text = """🆘 *Tempest AI Help*
-    
-*Basic Commands:*
+    help_text = """🆘 <b>Tempest AI Help</b>
+
+<b>Basic Commands:</b>
 /start - Initialize bot
 /help - Show this help
 /model - Current AI model  
@@ -442,49 +546,67 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /reset - Clear memory
 /info - About organization
 
-*In Groups:*
+<b>In Groups:</b>
 I only respond to messages containing "tempest" (case-insensitive)
 
-*Current Features:*
+<b>Current Features:</b>
 • Local AI with Ollama
-• Weather information
+• Weather information (use: "weather in [city]")
 • Time/date queries
 • Conversation memory
 • File exports (admin only)
 
-*Contact Owner:* `6108185460`
+<b>Contact Owner:</b> <code>6108185460</code>
 """
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text, parse_mode='HTML')
 
 async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /info command"""
-    info_text = """🏢 *About Tempest Creed*
-    
-*Organization:* Tempest Creed
-*Type:* Private AI Research Division
-*Focus:* Local AI systems and secure communication
-*Status:* Invite-only access
+    info_text = f"""🏢 <b>About Tempest Creed</b>
 
-*Bot Owner:* `6108185460`
-*Contact:* Telegram ID 6108185460
+<b>Organization:</b> Tempest Creed
+<b>Type:</b> Private AI Research Division
+<b>Focus:</b> Local AI systems and secure communication
+<b>Status:</b> Invite-only access
 
-*Mission:* To provide secure, private AI assistance through locally-hosted models, ensuring complete data privacy and user control.
+<b>Bot Owner:</b> <code>6108185460</code>
+<b>Contact:</b> Telegram ID 6108185460
 
-*Current AI Provider:* Ollama
-*Default Model:* {DEFAULT_MODEL}
+<b>Mission:</b> To provide secure, private AI assistance through locally-hosted models, ensuring complete data privacy and user control.
+
+<b>Current AI Provider:</b> Ollama
+<b>Default Model:</b> {DEFAULT_MODEL}
 
 For inquiries or access requests, contact the owner.
 """
-    await update.message.reply_text(info_text.format(DEFAULT_MODEL=DEFAULT_MODEL), parse_mode='Markdown')
+    await update.message.reply_text(info_text, parse_mode='HTML')
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /model command"""
-    await update.message.reply_text(
-        f"🤖 *Current AI Model:* `{DEFAULT_MODEL}`\n"
-        f"🌐 *Ollama URL:* `{OLLAMA_URL}`\n"
-        f"⚡ *Status:* {'🟢 Connected' if OLLAMA_URL else '🔴 Not configured'}",
-        parse_mode='Markdown'
-    )
+    # Test Ollama connection
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{OLLAMA_URL}/api/tags", timeout=5) as response:
+                if response.status == 200:
+                    status = "🟢 Connected"
+                else:
+                    status = "🔴 Not responding"
+    except:
+        status = "🔴 Cannot connect"
+    
+    model_text = f"""🤖 <b>AI Configuration</b>
+
+<b>Current Model:</b> <code>{DEFAULT_MODEL}</code>
+<b>Ollama URL:</b> <code>{OLLAMA_URL}</code>
+<b>Status:</b> {status}
+<b>Weather API:</b> {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}
+
+<b>Note:</b> If Ollama is not running locally, you can:
+1. Install from https://ollama.ai/
+2. Run: <code>ollama pull {DEFAULT_MODEL}</code>
+3. Run: <code>ollama serve</code>
+"""
+    await update.message.reply_text(model_text, parse_mode='HTML')
 
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /ask command"""
@@ -495,28 +617,38 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Please provide a question: `/ask What is AI?`", parse_mode='Markdown')
+        await update.message.reply_text("Please provide a question: <code>/ask What is AI?</code>", parse_mode='HTML')
         return
     
     question = " ".join(context.args)
     await update.message.reply_chat_action(action="typing")
     
-    # Check for current data queries
-    if "weather" in question.lower() and "in" in question.lower():
-        # Extract city name
-        try:
-            parts = question.lower().split("in")
-            if len(parts) > 1:
-                city = parts[1].strip()
-                weather = await get_current_weather(city)
-                await update.message.reply_text(weather)
-                return
-        except:
-            pass
+    # Check for weather queries
+    if "weather" in question.lower():
+        if "in" in question.lower():
+            try:
+                parts = question.lower().split("in")
+                if len(parts) > 1:
+                    city = parts[1].strip()
+                    weather = await get_current_weather(city)
+                    await update.message.reply_text(weather, parse_mode='HTML')
+                    
+                    # Log to database
+                    log_message(user.id, "private", question, weather, "weather_api", 0)
+                    update_user_stats(user.id)
+                    return
+            except Exception as e:
+                logger.error(f"Weather query error: {e}")
     
-    if any(word in question.lower() for word in ["time", "date", "today", "now"]):
+    # Check for time/date queries
+    if any(word in question.lower() for word in ["time", "date", "today", "now", "current time"]):
         time_info = get_current_time()
-        await update.message.reply_text(time_info)
+        await update.message.reply_text(time_info, parse_mode='HTML')
+        
+        # Log to database
+        log_message(user.id, "private", question, time_info, "time_api", 0)
+        update_user_stats(user.id)
+        return
     
     # Use AI for other questions
     response = await ask_ollama(question)
@@ -537,20 +669,20 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Access denied.")
         return
     
-    owner_commands = """👑 *OWNER COMMAND SUITE*
+    owner_commands = """👑 <b>OWNER COMMAND SUITE</b>
 
-*User Management:*
+<b>User Management:</b>
 /bfb [user_id] [reason] - Ban/Forbid user
 /pro [user_id] - Promote to admin
 /demote [user_id] - Demote admin
 /admins - List all admins
 
-*File Exports:*
+<b>File Exports:</b>
 /users - Export users list (txt)
 /logs [num] - Export logs (txt)
 /stats - Export statistics (txt)
 
-*System Control:*
+<b>System Control:</b>
 /broadcast [message] - Broadcast to all users
 /restart - Restart bot
 /backup - Backup database
@@ -558,11 +690,11 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /prompt [text] - Change system prompt
 /cleardb - Clear all data (⚠️ DANGER)
 
-*Info:*
+<b>Info:</b>
 /owner - Show this help
 """
     
-    await update.message.reply_text(owner_commands, parse_mode='Markdown')
+    await update.message.reply_text(owner_commands, parse_mode='HTML')
 
 async def bfb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /bfb command - Ban/Forbid user"""
@@ -572,7 +704,7 @@ async def bfb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: `/bfb [user_id] [reason]`\nExample: `/bfb 123456789 Spamming`", parse_mode='Markdown')
+        await update.message.reply_text("Usage: <code>/bfb [user_id] [reason]</code>\nExample: <code>/bfb 123456789 Spamming</code>", parse_mode='HTML')
         return
     
     try:
@@ -591,9 +723,32 @@ async def bfb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_banned(target_id):
             unban_user(target_id)
             await update.message.reply_text(f"✅ User {target_id} has been unbanned.")
+            
+            # Log to channel
+            log_msg = f"""🔓 <b>User Unbanned</b>
+
+👤 <b>Target:</b> {target_user['first_name']} (@{target_user['username']})
+🆔 <b>ID:</b> <code>{target_id}</code>
+👮 <b>By:</b> {user.first_name} (@{user.username})
+🆔 <b>Moderator ID:</b> <code>{user.id}</code>
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            await log_to_channel(context, log_msg)
         else:
             ban_user(target_id, user.id, reason)
             await update.message.reply_text(f"✅ User {target_id} has been banned.\nReason: {reason}")
+            
+            # Log to channel
+            log_msg = f"""🔒 <b>User Banned</b>
+
+👤 <b>Target:</b> {target_user['first_name']} (@{target_user['username']})
+🆔 <b>ID:</b> <code>{target_id}</code>
+👮 <b>By:</b> {user.first_name} (@{user.username})
+🆔 <b>Moderator ID:</b> <code>{user.id}</code>
+📝 <b>Reason:</b> {reason}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            await log_to_channel(context, log_msg)
             
     except ValueError:
         await update.message.reply_text("❌ Invalid user ID.")
@@ -606,7 +761,7 @@ async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: `/pro [user_id]`\nExample: `/pro 123456789`", parse_mode='Markdown')
+        await update.message.reply_text("Usage: <code>/pro [user_id]</code>\nExample: <code>/pro 123456789</code>", parse_mode='HTML')
         return
     
     try:
@@ -621,8 +776,24 @@ async def pro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ User {target_id} not found.")
             return
         
+        if is_admin(target_id):
+            await update.message.reply_text(f"❌ User {target_id} is already an admin.")
+            return
+        
         promote_to_admin(target_id, user.id)
         await update.message.reply_text(f"✅ User {target_id} has been promoted to admin.")
+        
+        # Log to channel
+        log_msg = f"""⬆️ <b>User Promoted to Admin</b>
+
+👤 <b>New Admin:</b> {target_user['first_name']} (@{target_user['username']})
+🆔 <b>ID:</b> <code>{target_id}</code>
+👑 <b>Promoted by:</b> {user.first_name} (@{user.username})
+🆔 <b>Owner ID:</b> <code>{user.id}</code>
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+👥 <b>Total Admins:</b> {len(get_all_admins()) + 1}
+"""
+        await log_to_channel(context, log_msg)
         
     except ValueError:
         await update.message.reply_text("❌ Invalid user ID.")
@@ -635,18 +806,23 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: `/broadcast [message]`", parse_mode='Markdown')
+        await update.message.reply_text("Usage: <code>/broadcast [message]</code>", parse_mode='HTML')
         return
     
     message = " ".join(context.args)
     users = get_all_users()
     
-    broadcast_msg = f"📢 *Broadcast from Tempest Creed*\n\n{message}\n\n_This is an automated message_"
+    broadcast_msg = f"""📢 <b>Broadcast from Tempest Creed</b>
+
+{message}
+
+<i>This is an automated message from the system.</i>
+"""
     
     sent = 0
     failed = 0
     
-    await update.message.reply_text(f"📡 Starting broadcast to {len(users)} users...")
+    status_msg = await update.message.reply_text(f"📡 Starting broadcast to {len(users)} users...")
     
     for user_data in users:
         user_id = user_data[0]
@@ -657,18 +833,34 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=broadcast_msg,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             sent += 1
             await asyncio.sleep(0.1)  # Rate limiting
         except:
             failed += 1
     
-    await update.message.reply_text(
-        f"✅ Broadcast completed!\n"
-        f"• Successfully sent: {sent}\n"
-        f"• Failed: {failed}"
-    )
+    result_msg = f"""✅ <b>Broadcast Completed</b>
+
+📤 <b>Successfully sent:</b> {sent}
+❌ <b>Failed:</b> {failed}
+👥 <b>Total recipients:</b> {len(users)}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    
+    await status_msg.edit_text(result_msg, parse_mode='HTML')
+    
+    # Log to channel
+    log_msg = f"""📢 <b>Broadcast Sent</b>
+
+📝 <b>Message:</b> {message[:100]}...
+👤 <b>Sent by:</b> {user.first_name} (@{user.username})
+🆔 <b>Sender ID:</b> <code>{user.id}</code>
+📤 <b>Successful:</b> {sent}
+❌ <b>Failed:</b> {failed}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    await log_to_channel(context, log_msg)
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /users command - Export users list"""
@@ -750,25 +942,28 @@ async def admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     admins = get_all_admins()
     
-    if not admins:
-        await update.message.reply_text("No admins found (except owner).")
-        return
+    admin_list = f"""👑 <b>ADMINISTRATORS LIST</b>
+
+<b>• Owner:</b> <code>{OWNER_ID}</code>
+<b>• Total Admins:</b> {len(admins)}
+"""
     
-    admin_list = "👑 *ADMINISTRATORS LIST*\n\n"
-    admin_list += f"• Owner: `{OWNER_ID}`\n"
+    if admins:
+        admin_list += "\n<b>Admin List:</b>\n"
+        for admin in admins:
+            user_id = admin[0]
+            username = admin[1] or "N/A"
+            promoted_by = admin[3]
+            promoted_at = admin[4]
+            
+            admin_list += f"\n<b>ID:</b> <code>{user_id}</code>\n"
+            admin_list += f"<b>Username:</b> @{username}\n"
+            admin_list += f"<b>Promoted by:</b> <code>{promoted_by}</code>\n"
+            admin_list += f"<b>Promoted at:</b> {promoted_at}\n"
+    else:
+        admin_list += "\nNo additional admins (only owner)."
     
-    for admin in admins:
-        user_id = admin[0]
-        username = admin[1] or "N/A"
-        promoted_by = admin[3]
-        promoted_at = admin[4]
-        
-        admin_list += f"\n• Admin: `{user_id}`\n"
-        admin_list += f"  Username: @{username}\n"
-        admin_list += f"  Promoted by: `{promoted_by}`\n"
-        admin_list += f"  Promoted at: {promoted_at}\n"
-    
-    await update.message.reply_text(admin_list, parse_mode='Markdown')
+    await update.message.reply_text(admin_list, parse_mode='HTML')
 
 async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /demote command - Demote admin"""
@@ -778,7 +973,7 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: `/demote [user_id]`")
+        await update.message.reply_text("Usage: <code>/demote [user_id]</code>", parse_mode='HTML')
         return
     
     try:
@@ -788,8 +983,25 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Cannot demote owner.")
             return
         
+        if not is_admin(target_id):
+            await update.message.reply_text(f"❌ User {target_id} is not an admin.")
+            return
+        
+        target_user = get_user(target_id)
         demote_admin(target_id)
         await update.message.reply_text(f"✅ User {target_id} has been demoted to user.")
+        
+        # Log to channel
+        log_msg = f"""⬇️ <b>Admin Demoted</b>
+
+👤 <b>Demoted User:</b> {target_user['first_name']} (@{target_user['username']})
+🆔 <b>ID:</b> <code>{target_id}</code>
+👑 <b>Demoted by:</b> {user.first_name} (@{user.username})
+🆔 <b>Owner ID:</b> <code>{user.id}</code>
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+👥 <b>Remaining Admins:</b> {len(get_all_admins())}
+"""
+        await log_to_channel(context, log_msg)
         
     except ValueError:
         await update.message.reply_text("❌ Invalid user ID.")
@@ -831,6 +1043,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_chat_action(action="typing")
     
+    # Check for weather queries
+    if "weather" in prompt.lower():
+        if "in" in prompt.lower():
+            try:
+                parts = prompt.lower().split("in")
+                if len(parts) > 1:
+                    city = parts[1].strip()
+                    weather = await get_current_weather(city)
+                    await update.message.reply_text(weather, parse_mode='HTML')
+                    
+                    # Log to database
+                    log_message(user.id, chat_type, prompt, weather, "weather_api", 0)
+                    update_user_stats(user.id)
+                    return
+            except Exception as e:
+                logger.error(f"Weather query error: {e}")
+    
+    # Check for time/date queries
+    if any(word in prompt.lower() for word in ["time", "date", "today", "now", "current time"]):
+        time_info = get_current_time()
+        await update.message.reply_text(time_info, parse_mode='HTML')
+        
+        # Log to database
+        log_message(user.id, chat_type, prompt, time_info, "time_api", 0)
+        update_user_stats(user.id)
+        return
+    
     # Get AI response
     response = await ask_ollama(prompt)
     
@@ -842,12 +1081,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 # ======================
+# ERROR HANDLER
+# ======================
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors"""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    try:
+        error_msg = f"""⚠️ <b>Bot Error Occurred</b>
+
+🔄 <b>Update:</b> {update.update_id if update else 'N/A'}
+❌ <b>Error:</b> {context.error}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        await log_to_channel(context, error_msg)
+    except:
+        pass
+
+# ======================
 # MAIN FUNCTION
 # ======================
 def main():
     """Start the bot"""
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add error handler
+    application.add_error_handler(error_handler)
     
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -870,15 +1130,46 @@ def main():
     # Message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    # Send startup message to log channel
+    async def send_startup_message():
+        try:
+            app = Application.builder().token(BOT_TOKEN).build()
+            await app.initialize()
+            
+            startup_msg = f"""🚀 <b>Tempest AI Started Successfully</b>
+
+🤖 <b>Bot:</b> Tempest AI
+👑 <b>Owner:</b> <code>{OWNER_ID}</code>
+🌐 <b>Ollama URL:</b> <code>{OLLAMA_URL}</code>
+🧠 <b>Default Model:</b> {DEFAULT_MODEL}
+🌤️ <b>Weather API:</b> {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}
+📅 <b>Startup Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            await app.bot.send_message(
+                chat_id=LOG_CHANNEL,
+                text=startup_msg,
+                parse_mode='HTML'
+            )
+            await app.shutdown()
+        except Exception as e:
+            logger.error(f"Failed to send startup message: {e}")
+    
     # Start the bot
     print("🌪️ Tempest AI is starting...")
     print(f"🤖 Bot Token: {BOT_TOKEN[:15]}...")
     print(f"👑 Owner ID: {OWNER_ID}")
     print(f"🧠 Default Model: {DEFAULT_MODEL}")
     print(f"🌐 Ollama URL: {OLLAMA_URL}")
+    print(f"🌤️ Weather API: {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}")
+    print(f"📺 Log Channel: {LOG_CHANNEL}")
+    print(f"🖼️ Welcome Pic: {WELCOME_PIC}")
     print("🚀 Bot is now running...")
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Run startup message
+    asyncio.run(send_startup_message())
+    
+    # Start polling
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
