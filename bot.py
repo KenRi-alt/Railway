@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🌪️ TEMPEST AI - Complete Telegram Bot
+🌪️ TEMPEST AI - Fixed Initialization
 Organization: Tempest Creed
 Owner ID: 6108185460
 """
@@ -459,15 +459,25 @@ def get_current_time() -> str:
 # ======================
 # LOG CHANNEL FUNCTIONS
 # ======================
-async def log_to_channel(context: ContextTypes.DEFAULT_TYPE, message: str):
+async def send_startup_message(bot_token: str, bot_username: str = "Tempest AI"):
+    """Send startup message to log channel"""
     try:
-        await context.bot.send_message(
+        from telegram import Bot
+        bot = Bot(token=bot_token)
+        startup_msg = f"""🚀 <b>Tempest AI Started</b>
+        
+🤖 Bot: @{bot_username}
+👑 Owner: <code>{OWNER_ID}</code>
+📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⚡ Status: 🟢 OPERATIONAL
+"""
+        await bot.send_message(
             chat_id=LOG_CHANNEL,
-            text=message,
+            text=startup_msg,
             parse_mode='HTML'
         )
     except Exception as e:
-        logger.error(f"Failed to send log to channel: {e}")
+        print(f"⚠️ Failed to send startup message: {e}")
 
 # ======================
 # PUBLIC COMMANDS
@@ -581,11 +591,10 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /query [user_id] [question] - Direct AI query
 /restart - Restart bot
 /backup - Backup database
-/maintenance [on/off] - Maintenance mode
+/status - System status
 
 <b>Info:</b>
 /owner - Show this help
-/status - System status
 """
     await update.message.reply_text(owner_commands, parse_mode='HTML')
 
@@ -675,6 +684,31 @@ async def query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Admin access required.")
         return
     
+    if not context.args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "1. <code>/query [user_id] [question]</code> - Query about user\n"
+            "2. <code>/query 100</code> - Export last 100 query logs",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if first argument is a number (for export)
+    if len(context.args) == 1 and context.args[0].isdigit():
+        # Export query logs
+        lines = int(context.args[0])
+        lines = min(lines, 1000)
+        await update.message.reply_text(f"📝 Generating query logs ({lines} lines)...")
+        filename = export_queries_to_file(lines)
+        try:
+            with open(filename, 'rb') as f:
+                await update.message.reply_document(document=f, filename=filename)
+            os.remove(filename)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error exporting queries: {str(e)}")
+        return
+    
+    # Query about user
     if len(context.args) < 2:
         await update.message.reply_text(
             "Usage: <code>/query [user_id] [question]</code>\n"
@@ -723,8 +757,7 @@ async def query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             f"📊 <b>Query Result for User {target_id}</b>\n\n"
-            f"{response}\n\n"
-            f"<i>Generated using {model}</i>",
+            f"{response}",
             parse_mode='HTML'
         )
         
@@ -732,31 +765,6 @@ async def query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid user ID.")
     except Exception as e:
         await update.message.reply_text(f"❌ Query failed: {str(e)}")
-
-async def export_query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /query export - Export query logs"""
-    user = update.effective_user
-    if user.id != OWNER_ID and not is_admin(user.id):
-        await update.message.reply_text("❌ Admin access required.")
-        return
-    
-    lines = 100
-    if context.args:
-        try:
-            lines = int(context.args[0])
-            lines = min(lines, 1000)
-        except:
-            pass
-    
-    await update.message.reply_text(f"📝 Generating query logs ({lines} lines)...")
-    filename = export_queries_to_file(lines)
-    
-    try:
-        with open(filename, 'rb') as f:
-            await update.message.reply_document(document=f, filename=filename)
-        os.remove(filename)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error exporting queries: {str(e)}")
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -951,7 +959,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================
 # TOKEN VALIDATION
 # ======================
-async def validate_bot_token(token: str) -> bool:
+async def validate_bot_token(token: str) -> Tuple[bool, str]:
     """Validate the bot token before starting"""
     try:
         url = f"https://api.telegram.org/bot{token}/getMe"
@@ -959,39 +967,63 @@ async def validate_bot_token(token: str) -> bool:
             async with session.get(url, timeout=10) as response:
                 data = await response.json()
                 if data.get("ok"):
-                    print(f"✅ Bot Token Valid! Bot: @{data['result']['username']}")
-                    return True
+                    username = data['result']['username']
+                    print(f"✅ Bot Token Valid! Bot: @{username}")
+                    return True, username
                 else:
-                    print(f"❌ Invalid Bot Token: {data.get('description', 'Unknown error')}")
-                    return False
+                    error_msg = data.get('description', 'Unknown error')
+                    print(f"❌ Invalid Bot Token: {error_msg}")
+                    return False, error_msg
     except Exception as e:
         print(f"❌ Failed to validate token: {e}")
-        return False
+        return False, str(e)
 
 # ======================
-# MAIN FUNCTION
+# MAIN FUNCTION - FIXED
 # ======================
 async def main_async():
-    """Main async function"""
+    """Main async function - FIXED INITIALIZATION"""
     
-    # Validate token
     print(f"🔑 Testing Bot Token: {BOT_TOKEN[:15]}...")
-    is_valid = await validate_bot_token(BOT_TOKEN)
+    is_valid, bot_username = await validate_bot_token(BOT_TOKEN)
+    
     if not is_valid:
-        print("\n❌ BOT TOKEN IS INVALID!")
-        print("Please get a new token from @BotFather and update BOT_TOKEN in the code.")
+        print(f"\n❌ BOT TOKEN ERROR: {bot_username}")
+        print("\nPlease check:")
+        print("1. Is the token correct?")
+        print("2. Did you regenerate it in @BotFather?")
+        print("3. Try: Message @BotFather → /mybots → Select bot → API Token")
+        print("4. Copy NEW token and update BOT_TOKEN in code")
         return
     
-    # Create application
+    # Create and initialize application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Initialize the bot properly
+    await application.initialize()
+    await application.start()
+    
+    print(f"\n🤖 Bot Username: @{bot_username}")
+    print(f"👑 Owner ID: {OWNER_ID}")
+    print(f"🔑 RapidAPI Key: {RAPIDAPI_KEY[:10]}...")
+    print(f"🌤️ Weather API: {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}")
+    print(f"📺 Log Channel: {LOG_CHANNEL}")
+    print("🚀 Bot is now running 24/7...")
+    
+    # Send startup message to log channel
+    try:
+        await send_startup_message(BOT_TOKEN, bot_username)
+    except Exception as e:
+        print(f"⚠️ Could not send startup message: {e}")
+    
+    # Add handlers
     # Public commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("info", info_command))
     application.add_handler(CommandHandler("image", image_command))
     
-    # Owner commands (COMPLETE SET)
+    # Owner commands
     application.add_handler(CommandHandler("owner", owner_command))
     application.add_handler(CommandHandler("bfb", bfb_command))
     application.add_handler(CommandHandler("pro", pro_command))
@@ -1009,37 +1041,16 @@ async def main_async():
     # Main message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("\n🌪️ TEMPEST AI STARTING...")
-    print(f"🤖 Bot: @{application.bot.username}")
-    print(f"👑 Owner ID: {OWNER_ID}")
-    print(f"🔑 RapidAPI Key: {RAPIDAPI_KEY[:10]}...")
-    print(f"🌤️ Weather API: {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}")
-    print(f"📺 Log Channel: {LOG_CHANNEL}")
-    print("🚀 Bot is now running 24/7...")
-    
-    # Send startup to log channel
-    try:
-        startup_msg = f"""🚀 <b>Tempest AI Started</b>
-        
-🤖 Bot: @{application.bot.username}
-👑 Owner: <code>{OWNER_ID}</code>
-📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-⚡ Status: 🟢 OPERATIONAL
-"""
-        await application.bot.send_message(
-            chat_id=LOG_CHANNEL,
-            text=startup_msg,
-            parse_mode='HTML'
-        )
-    except Exception as e:
-        print(f"⚠️ Failed to send startup message to log channel: {e}")
-    
     # Start polling
     await application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
         close_loop=False
     )
+    
+    # Cleanup
+    await application.stop()
+    await application.shutdown()
 
 def main():
     """Main entry point"""
@@ -1048,7 +1059,7 @@ def main():
     except KeyboardInterrupt:
         print("\n👋 Bot stopped by user")
     except Exception as e:
-        print(f"\n❌ Critical error: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
