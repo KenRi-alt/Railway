@@ -13,6 +13,7 @@ import logging
 import aiohttp
 import random
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple  # ADDED Tuple HERE
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -314,8 +315,8 @@ async def unified_ai_response(prompt: str) -> Tuple[str, str]:
                     if "choices" in data and len(data["choices"]) > 0:
                         response_text = data["choices"][0]["message"]["content"]
                         return response_text.strip(), "gpt-3.5-turbo"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Primary AI failed: {e}")
     
     # 2. SECOND TRY: Ollama/Qwen
     try:
@@ -338,8 +339,8 @@ async def unified_ai_response(prompt: str) -> Tuple[str, str]:
                         return data["response"].strip(), "qwen2.5"
                     elif "choices" in data:
                         return data["choices"][0]["text"].strip(), "qwen2.5"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Fallback AI failed: {e}")
     
     # 3. FINAL FALLBACK
     fallback_responses = [
@@ -369,8 +370,8 @@ async def generate_tempest_image(prompt: str) -> Optional[str]:
                         return data["image_url"]
                     elif "url" in data:
                         return data["url"]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Image generation failed: {e}")
     return None
 
 async def get_current_weather(city: str) -> str:
@@ -387,8 +388,8 @@ async def get_current_weather(city: str) -> str:
                     desc = data['weather'][0]['description'].title()
                     humidity = data['main']['humidity']
                     return f"🌤️ Weather in {city}: {temp}°C, {desc}, Humidity: {humidity}%"
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Weather API error: {e}")
     return "Weather service unavailable."
 
 def get_current_time() -> str:
@@ -405,8 +406,8 @@ async def log_to_channel(context: ContextTypes.DEFAULT_TYPE, message: str):
             text=message,
             parse_mode='HTML'
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to send log to channel: {e}")
 
 # ======================
 # PUBLIC COMMANDS
@@ -704,8 +705,9 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Admin access required.")
         return
     import shutil
-    shutil.copy2('tempest.db', f'tempest_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db')
-    await update.message.reply_text("✅ Database backup created.")
+    backup_file = f'tempest_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+    shutil.copy2('tempest.db', backup_file)
+    await update.message.reply_text(f"✅ Database backup created: {backup_file}")
 
 # ======================
 # MAIN MESSAGE HANDLER
@@ -738,8 +740,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update_user_stats(user.id)
                 log_message(user.id, chat_type, message_text, weather, "weather_api")
                 return
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Weather query error: {e}")
     
     # Time queries
     if any(word in message_text.lower() for word in ["time", "date", "today", "now"]):
