@@ -1,0 +1,21 @@
+
+## 📝 **FILE 6: .gitignore**
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+*.db
+*.log
+*.txt
+
+# Exports
+exports/
+backups/
+data/
