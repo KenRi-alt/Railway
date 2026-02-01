@@ -12,8 +12,9 @@ import asyncio
 import logging
 import aiohttp
 import random
+import shutil
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple  # ADDED Tuple HERE
+from typing import Dict, List, Optional, Tuple
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -28,10 +29,10 @@ from telegram.ext import (
 # ======================
 OWNER_ID = 6108185460
 BOT_TOKEN = "7869314780:AAFFU5jMv-WK9sCJnAJ4X0oRtog632B9sUg"
+RAPIDAPI_KEY = "92823ef8acmsh086c6b1d4344b79p128756jsn14144695e111"
 WEATHER_API_KEY = "b5622fffde3852de7528ec5d71a9850a"
 LOG_CHANNEL = -1003662720845
 WELCOME_PIC = "https://files.catbox.moe/s4k1rn.jpg"
-RAPIDAPI_KEY = "92823ef8acmsh086c6b1d4344b79p128756jsn14144695e111"
 
 # API Endpoints
 OPENAI_CHAT_URL = "https://open-ai32.p.rapidapi.com/conversationgpt35"
@@ -82,6 +83,7 @@ def init_database():
         message TEXT,
         response TEXT,
         ai_model TEXT,
+        tokens INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -92,6 +94,16 @@ def init_database():
         banned_by INTEGER,
         reason TEXT,
         banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS queries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        query TEXT,
+        result TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
     
@@ -186,12 +198,20 @@ def get_all_admins():
     ''')
     return cursor.fetchall()
 
-def log_message(user_id: int, chat_type: str, message: str, response: str, ai_model: str):
+def log_message(user_id: int, chat_type: str, message: str, response: str, ai_model: str, tokens: int):
     cursor = DB.cursor()
     cursor.execute('''
-    INSERT INTO messages (user_id, chat_type, message, response, ai_model)
-    VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, chat_type, message, response, ai_model))
+    INSERT INTO messages (user_id, chat_type, message, response, ai_model, tokens)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, chat_type, message, response, ai_model, tokens))
+    DB.commit()
+
+def log_query(user_id: int, query: str, result: str):
+    cursor = DB.cursor()
+    cursor.execute('''
+    INSERT INTO queries (user_id, query, result)
+    VALUES (?, ?, ?)
+    ''', (user_id, query, result))
     DB.commit()
 
 def get_stats():
@@ -206,12 +226,17 @@ def get_stats():
     total_messages = cursor.fetchone()[0] or 0
     cursor.execute('SELECT COUNT(*) FROM messages')
     total_interactions = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM queries')
+    total_queries = cursor.fetchone()[0]
     return {
         'total_users': total_users, 'banned_users': banned_users,
         'total_admins': total_admins, 'total_messages': total_messages,
-        'total_interactions': total_interactions
+        'total_interactions': total_interactions, 'total_queries': total_queries
     }
 
+# ======================
+# FILE EXPORT FUNCTIONS
+# ======================
 def export_users_to_file():
     users = get_all_users()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -266,6 +291,36 @@ Timestamp           User ID     Username    Message Preview
         f.write(content)
     return filename
 
+def export_queries_to_file(lines: int = 100):
+    cursor = DB.cursor()
+    cursor.execute('''
+    SELECT q.created_at, u.user_id, u.username, q.query, q.result
+    FROM queries q
+    LEFT JOIN users u ON q.user_id = u.user_id
+    ORDER BY q.created_at DESC
+    LIMIT ?
+    ''', (lines,))
+    queries = cursor.fetchall()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    content = f"""🌪️ TEMPEST CREED - QUERY LOGS
+Generated: {timestamp}
+Total Queries: {len(queries)}
+
+Timestamp           User ID     Username    Query Preview
+{'-'*80}
+"""
+    for query in queries:
+        timestamp = query[0]
+        user_id = query[1]
+        username = query[2] or "N/A"
+        query_text = (query[3][:50] + '...') if len(query[3]) > 50 else query[3]
+        content += f"{timestamp:<20} {user_id:<12} {username:<12} {query_text}\n"
+    
+    filename = f"queries_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return filename
+
 def export_stats_to_file():
     stats = get_stats()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -280,7 +335,12 @@ Generated: {timestamp}
 
 🤖 BOT STATISTICS:
 • Total Interactions: {stats['total_interactions']}
+• Total Queries: {stats['total_queries']}
 • AI System: Unified Tempest AI
+
+🕒 SYSTEM INFO:
+• Uptime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• Owner ID: {OWNER_ID}
 """
     filename = f"stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
@@ -495,14 +555,14 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Failed to generate image.")
 
 # ======================
-# OWNER COMMANDS (ALL INCLUDED)
+# OWNER COMMANDS (COMPLETE SET)
 # ======================
 async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != OWNER_ID:
         await update.message.reply_text("❌ Access denied.")
         return
-    owner_commands = """👑 <b>OWNER COMMAND SUITE</b>
+    owner_commands = """👑 <b>TEMPEST COMMAND CENTER</b>
 
 <b>User Management:</b>
 /bfb [user_id] [reason] - Ban/Forbid user
@@ -513,16 +573,19 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>File Exports:</b>
 /users - Export users list (txt)
 /logs [num] - Export logs (txt)
+/query [num] - Export query logs (txt)
 /stats - Export statistics (txt)
 
 <b>System Control:</b>
 /broadcast [message] - Broadcast to all users
+/query [user_id] [question] - Direct AI query
 /restart - Restart bot
 /backup - Backup database
 /maintenance [on/off] - Maintenance mode
 
 <b>Info:</b>
 /owner - Show this help
+/status - System status
 """
     await update.message.reply_text(owner_commands, parse_mode='HTML')
 
@@ -605,6 +668,96 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result_msg = f"✅ <b>Broadcast Completed</b>\n\n📤 <b>Successfully sent:</b> {sent}\n❌ <b>Failed:</b> {failed}"
     await status_msg.edit_text(result_msg, parse_mode='HTML')
 
+async def query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /query command - Owner can query specific user data"""
+    user = update.effective_user
+    if user.id != OWNER_ID and not is_admin(user.id):
+        await update.message.reply_text("❌ Admin access required.")
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: <code>/query [user_id] [question]</code>\n"
+            "Example: <code>/query 123456789 What is their activity level?</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        question = " ".join(context.args[1:])
+        
+        target_user = get_user(target_id)
+        if not target_user:
+            await update.message.reply_text(f"❌ User {target_id} not found.")
+            return
+        
+        # Get user statistics
+        cursor = DB.cursor()
+        cursor.execute('SELECT COUNT(*) FROM messages WHERE user_id = ?', (target_id,))
+        user_messages = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM queries WHERE user_id = ?', (target_id,))
+        user_queries = cursor.fetchone()[0]
+        
+        # Prepare query context
+        user_info = f"""
+        User ID: {target_id}
+        Username: @{target_user['username'] or 'N/A'}
+        Name: {target_user['first_name']} {target_user['last_name']}
+        Role: {target_user['role']}
+        Messages: {user_messages}
+        Queries: {user_queries}
+        Joined: {target_user['created_at']}
+        Last Seen: {target_user['last_seen']}
+        Status: {"🔴 BANNED" if target_user['banned'] else "🟢 ACTIVE"}
+        
+        Question: {question}
+        """
+        
+        await update.message.reply_chat_action(action="typing")
+        response, model = await unified_ai_response(user_info)
+        
+        # Log the query
+        log_query(user.id, f"Query about user {target_id}: {question}", response)
+        
+        await update.message.reply_text(
+            f"📊 <b>Query Result for User {target_id}</b>\n\n"
+            f"{response}\n\n"
+            f"<i>Generated using {model}</i>",
+            parse_mode='HTML'
+        )
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Query failed: {str(e)}")
+
+async def export_query_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /query export - Export query logs"""
+    user = update.effective_user
+    if user.id != OWNER_ID and not is_admin(user.id):
+        await update.message.reply_text("❌ Admin access required.")
+        return
+    
+    lines = 100
+    if context.args:
+        try:
+            lines = int(context.args[0])
+            lines = min(lines, 1000)
+        except:
+            pass
+    
+    await update.message.reply_text(f"📝 Generating query logs ({lines} lines)...")
+    filename = export_queries_to_file(lines)
+    
+    try:
+        with open(filename, 'rb') as f:
+            await update.message.reply_document(document=f, filename=filename)
+        os.remove(filename)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error exporting queries: {str(e)}")
+
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != OWNER_ID and not is_admin(user.id):
@@ -667,7 +820,11 @@ async def admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id = admin[0]
             username = admin[1] or "N/A"
             promoted_by = admin[3]
-            admin_list += f"\n<b>ID:</b> <code>{user_id}</code>\n<b>Username:</b> @{username}\n"
+            promoted_at = admin[4]
+            admin_list += f"\n<b>ID:</b> <code>{user_id}</code>\n"
+            admin_list += f"<b>Username:</b> @{username}\n"
+            admin_list += f"<b>Promoted by:</b> <code>{promoted_by}</code>\n"
+            admin_list += f"<b>Promoted at:</b> {promoted_at}\n"
     await update.message.reply_text(admin_list, parse_mode='HTML')
 
 async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -704,10 +861,39 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id != OWNER_ID and not is_admin(user.id):
         await update.message.reply_text("❌ Admin access required.")
         return
-    import shutil
     backup_file = f'tempest_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
     shutil.copy2('tempest.db', backup_file)
     await update.message.reply_text(f"✅ Database backup created: {backup_file}")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != OWNER_ID and not is_admin(user.id):
+        await update.message.reply_text("❌ Admin access required.")
+        return
+    
+    stats = get_stats()
+    status_text = f"""📊 <b>TEMPEST AI STATUS</b>
+
+<b>User Statistics:</b>
+• Total Users: {stats['total_users']}
+• Banned Users: {stats['banned_users']}
+• Active Admins: {stats['total_admins']}
+• Total Messages: {stats['total_messages']}
+
+<b>System Statistics:</b>
+• Total Interactions: {stats['total_interactions']}
+• Total Queries: {stats['total_queries']}
+
+<b>AI Status:</b>
+• Primary Model: GPT-3.5 Turbo
+• Fallback Model: Qwen 2.5
+• Image Model: FLUX AI
+• System Status: 🟢 OPERATIONAL
+
+<b>Owner:</b> <code>{OWNER_ID}</code>
+<b>Log Channel:</b> <code>{LOG_CHANNEL}</code>
+"""
+    await update.message.reply_text(status_text, parse_mode='HTML')
 
 # ======================
 # MAIN MESSAGE HANDLER
@@ -738,7 +924,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 weather = await get_current_weather(city)
                 await update.message.reply_text(weather)
                 update_user_stats(user.id)
-                log_message(user.id, chat_type, message_text, weather, "weather_api")
+                log_message(user.id, chat_type, message_text, weather, "weather_api", 0)
                 return
         except Exception as e:
             logger.error(f"Weather query error: {e}")
@@ -748,7 +934,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time_info = get_current_time()
         await update.message.reply_text(time_info)
         update_user_stats(user.id)
-        log_message(user.id, chat_type, message_text, time_info, "time_api")
+        log_message(user.id, chat_type, message_text, time_info, "time_api", 0)
         return
     
     await update.message.reply_chat_action(action="typing")
@@ -756,16 +942,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # UNIFIED AI RESPONSE - NO WATERMARKS
     response, model_used = await unified_ai_response(message_text)
     
-    # Send clean response without any watermarks
+    # Send clean response
     await update.message.reply_text(response)
     
     update_user_stats(user.id)
-    log_message(user.id, chat_type, message_text, response, model_used)
+    log_message(user.id, chat_type, message_text, response, model_used, len(response.split()))
 
 # ======================
-# MAIN FUNCTION - ALWAYS AWAKE
+# TOKEN VALIDATION
 # ======================
-def main():
+async def validate_bot_token(token: str) -> bool:
+    """Validate the bot token before starting"""
+    try:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                data = await response.json()
+                if data.get("ok"):
+                    print(f"✅ Bot Token Valid! Bot: @{data['result']['username']}")
+                    return True
+                else:
+                    print(f"❌ Invalid Bot Token: {data.get('description', 'Unknown error')}")
+                    return False
+    except Exception as e:
+        print(f"❌ Failed to validate token: {e}")
+        return False
+
+# ======================
+# MAIN FUNCTION
+# ======================
+async def main_async():
+    """Main async function"""
+    
+    # Validate token
+    print(f"🔑 Testing Bot Token: {BOT_TOKEN[:15]}...")
+    is_valid = await validate_bot_token(BOT_TOKEN)
+    if not is_valid:
+        print("\n❌ BOT TOKEN IS INVALID!")
+        print("Please get a new token from @BotFather and update BOT_TOKEN in the code.")
+        return
+    
+    # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Public commands
@@ -774,11 +991,12 @@ def main():
     application.add_handler(CommandHandler("info", info_command))
     application.add_handler(CommandHandler("image", image_command))
     
-    # Owner commands (ALL INCLUDED)
+    # Owner commands (COMPLETE SET)
     application.add_handler(CommandHandler("owner", owner_command))
     application.add_handler(CommandHandler("bfb", bfb_command))
     application.add_handler(CommandHandler("pro", pro_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("query", query_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("logs", logs_command))
     application.add_handler(CommandHandler("stats", stats_command))
@@ -786,22 +1004,53 @@ def main():
     application.add_handler(CommandHandler("demote", demote_command))
     application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("backup", backup_command))
+    application.add_handler(CommandHandler("status", status_command))
     
     # Main message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🌪️ Tempest AI - ALWAYS AWAKE")
-    print(f"🤖 Bot Token: {BOT_TOKEN[:15]}...")
+    print("\n🌪️ TEMPEST AI STARTING...")
+    print(f"🤖 Bot: @{application.bot.username}")
     print(f"👑 Owner ID: {OWNER_ID}")
     print(f"🔑 RapidAPI Key: {RAPIDAPI_KEY[:10]}...")
+    print(f"🌤️ Weather API: {'✅ Configured' if WEATHER_API_KEY else '❌ Not configured'}")
+    print(f"📺 Log Channel: {LOG_CHANNEL}")
     print("🚀 Bot is now running 24/7...")
     
-    # Run with persistent polling (always awake)
-    application.run_polling(
+    # Send startup to log channel
+    try:
+        startup_msg = f"""🚀 <b>Tempest AI Started</b>
+        
+🤖 Bot: @{application.bot.username}
+👑 Owner: <code>{OWNER_ID}</code>
+📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⚡ Status: 🟢 OPERATIONAL
+"""
+        await application.bot.send_message(
+            chat_id=LOG_CHANNEL,
+            text=startup_msg,
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to send startup message to log channel: {e}")
+    
+    # Start polling
+    await application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
         close_loop=False
     )
+
+def main():
+    """Main entry point"""
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        print("\n👋 Bot stopped by user")
+    except Exception as e:
+        print(f"\n❌ Critical error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
     main()
