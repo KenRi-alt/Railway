@@ -32,7 +32,7 @@ from aiogram.client.default import DefaultBotProperties
 # ============================================
 # CONFIGURATION
 # ============================================
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your bot token
+TOKEN = "8302810352:AAHzhQdIgMB71mEKcZcFW8uNVJ_EPtpu0es"  # Replace with your bot token
 ADMIN_ID = 6108185460  # Replace with your Telegram ID
 
 logging.basicConfig(
