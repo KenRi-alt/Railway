@@ -32,8 +32,8 @@ from aiogram.client.default import DefaultBotProperties
 # ============================================
 # CONFIGURATION
 # ============================================
-TOKEN = "8302810352:AAHzhQdIgMB71mEKcZcFW8uNVJ_EPtpu0es"
-ADMIN_ID = 6108185460
+TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your bot token
+ADMIN_ID = 6108185460  # Replace with your Telegram ID
 
 logging.basicConfig(
     level=logging.INFO,
@@ -746,7 +746,8 @@ async def cmd_ban(message: Message, command: CommandObject):
 async def cmd_unban(message: Message, command: CommandObject):
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Unauthorized access.")
-        return    
+        return
+    
     if not command.args:
         await message.answer("Usage: /unban [user_id]")
         return
@@ -931,16 +932,6 @@ async def show_topic_info(callback: CallbackQuery):
     if topic_info:
         add_points(callback.from_user.id, 5)  # XP for exploring
         
-        # Check achievement
-        conn = sqlite3.connect("tempest_guider.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR IGNORE INTO user_achievements (user_id, achievement_name, unlocked_date)
-            VALUES (?, 'topic_explorer', ?)
-        """, (callback.from_user.id, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-        
         text = (
             f"{topic_info['icon']} **{topic_info['name']}**\n\n"
             f"📚 **Category:** {topic_category}\n"
@@ -1074,6 +1065,53 @@ async def menu_graph(callback: CallbackQuery):
         "• y = 2*x + 3\n"
         "• y = sqrt(x)\n\n"
         "Just type /graph followed by your equation!",
+        reply_markup=kb.as_markup(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "menu_formulas")
+async def menu_formulas(callback: CallbackQuery):
+    formulas_text = (
+        "📖 **FORMULA REFERENCE GUIDE**\n\n"
+        "📊 **ALGEBRA**\n"
+        "• Quadratic: x = (-b ± √(b² - 4ac)) / 2a\n"
+        "• (a + b)² = a² + 2ab + b²\n"
+        "• (a - b)² = a² - 2ab + b²\n\n"
+        "📐 **GEOMETRY**\n"
+        "• Circle Area: A = πr²\n"
+        "• Triangle Area: A = ½bh\n"
+        "• Pythagorean: a² + b² = c²\n\n"
+        "📈 **CALCULUS**\n"
+        "• Derivative: d/dx(xⁿ) = nxⁿ⁻¹\n"
+        "• Integral: ∫xⁿdx = xⁿ⁺¹/(n+1) + C\n\n"
+        "📊 **STATISTICS**\n"
+        "• Mean: μ = Σx/n\n"
+        "• Standard Deviation: σ = √(Σ(x-μ)²/n)"
+    )
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="« Main Menu", callback_data="back_main")
+    
+    await callback.message.edit_text(
+        formulas_text,
+        reply_markup=kb.as_markup(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "menu_settings")
+async def menu_settings(callback: CallbackQuery):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🌐 Language", callback_data="settings_language")
+    kb.button(text="🔔 Notifications", callback_data="settings_notifications")
+    kb.button(text="🎨 Theme", callback_data="settings_theme")
+    kb.button(text="« Main Menu", callback_data="back_main")
+    kb.adjust(1)
+    
+    await callback.message.edit_text(
+        "⚙️ **SETTINGS**\n\n"
+        "Select a setting to configure:",
         reply_markup=kb.as_markup(),
         parse_mode=ParseMode.MARKDOWN
     )
