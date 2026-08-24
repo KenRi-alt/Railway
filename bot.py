@@ -1,1426 +1,1777 @@
-import asyncio
-import logging
-import sqlite3
+#!/usr/bin/env python3
+# ========== TEMPEST BOT - ULTIMATE FIXED ==========
 import os
-import re
-import json
-import random
-import string
+import asyncio
 import time
+import random
+import sqlite3
+import json
+import httpx
+import shutil
+import traceback
+import psutil
+import math
+import io
+import base64
+import sys
+import subprocess
+import textwrap
 from datetime import datetime, timedelta
-from io import BytesIO
-from typing import Optional, Dict, List, Tuple, Any
+from pathlib import Path
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, FSInputFile, CallbackQuery, BufferedInputFile
+from aiogram.enums import ParseMode, ChatType
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 
-import numpy as np
-from PIL import (
-    Image, ImageOps, ImageDraw, ImageFont, 
-    ImageFilter, ImageEnhance, ImageChops, ImageStat
-)
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.types import (
-    Message, CallbackQuery, BufferedInputFile, 
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ChatMemberUpdated,
-    ChatPermissions
-)
-from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-from aiogram.enums import ParseMode, ChatMemberStatus
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.client.default import DefaultBotProperties
+print("=" * 60)
+print("🌀 TEMPEST BOT - ULTIMATE FIXED")
+print("✅ All commands operational")
+print("=" * 60)
 
-# ============================================
-# CONFIGURATION
-# ============================================
-TOKEN = "8302810352:AAHzhQdIgMB71mEKcZcFW8uNVJ_EPtpu0es"  # Replace with your bot token
-ADMIN_ID = 6108185460  # Replace with your Telegram ID
+# ========== CONFIG ==========
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8017048722:AAFVRZytQIWAq6S3r6NXM-CvPbt_agGMk4Y")
+OWNER_ID = int(os.getenv("OWNER_ID", "6108185460"))
+UPLOAD_API = "https://catbox.moe/user/api.php"
+LOG_CHANNEL_ID = -1003662720845
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Try importing yt-dlp
+try:
+    import yt_dlp
+    YTDLP_AVAILABLE = True
+except ImportError:
+    YTDLP_AVAILABLE = False
 
-router = Router()
+# Create directories
+for dir_name in ["data", "temp", "backups", "profile_cards", "fonts"]:
+    Path(dir_name).mkdir(exist_ok=True)
 
-# ============================================
-# DATABASE SETUP
-# ============================================
-def init_db():
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+start_time = time.time()
+bot_active = True
+upload_waiting = {}
+broadcast_state = {}
+pending_restore = {}
+disabled_commands = {}
+maintenance_mode = False
+last_activity = datetime.now()
+
+# ========== COMPACT ART STYLE ==========
+class ArtStyle:
+    @staticmethod
+    def fancy_text(text):
+        fancy_map = {
+            'a': '𝔞', 'b': '𝔟', 'c': '𝔠', 'd': '𝔡', 'e': '𝔢',
+            'f': '𝔣', 'g': '𝔤', 'h': '𝔥', 'i': '𝔦', 'j': '𝔧',
+            'k': '𝔨', 'l': '𝔩', 'm': '𝔪', 'n': '𝔫', 'o': '𝔬',
+            'p': '𝔭', 'q': '𝔮', 'r': '𝔯', 's': '𝔰', 't': '𝔱',
+            'u': '𝔲', 'v': '𝔳', 'w': '𝔴', 'x': '𝔵', 'y': '𝔶',
+            'z': '𝔷'
+        }
+        return ''.join(fancy_map.get(c.lower(), c) for c in text)
     
-    # Users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+    @staticmethod
+    def header(title):
+        return f"◤━━━━━━━━━━━━━━━━━━━━◥\n◇ {title} ◇\n◣━━━━━━━━━━━━━━━━━━━━◢"
+    
+    @staticmethod
+    def divider():
+        return "━━━━━━━━━━━━━━━━━━━━"
+
+# ========== DATABASE INIT ==========
+def init_db():
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             first_name TEXT,
-            points INTEGER DEFAULT 0,
-            level INTEGER DEFAULT 1,
-            join_date TEXT,
+            joined_date TEXT,
             last_active TEXT,
-            warnings INTEGER DEFAULT 0,
+            uploads INTEGER DEFAULT 0,
+            commands INTEGER DEFAULT 0,
+            is_admin INTEGER DEFAULT 0,
             is_banned INTEGER DEFAULT 0,
-            selected_topic TEXT,
-            total_solved INTEGER DEFAULT 0,
-            total_images INTEGER DEFAULT 0,
-            quiz_score INTEGER DEFAULT 0
-        )
-    """)
-    
-    # Math history
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS math_history (
-            problem_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cult_status TEXT DEFAULT 'none',
+            cult_rank TEXT DEFAULT 'none',
+            cult_join_date TEXT,
+            sacrifices INTEGER DEFAULT 0,
+            curse_type TEXT DEFAULT 'none',
+            curse_time TEXT DEFAULT NULL,
+            curse_by INTEGER DEFAULT NULL
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS groups (
+            group_id INTEGER PRIMARY KEY,
+            title TEXT,
+            username TEXT,
+            joined_date TEXT,
+            last_active TEXT,
+            messages INTEGER DEFAULT 0,
+            commands INTEGER DEFAULT 0
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            topic TEXT,
-            problem_text TEXT,
-            solution TEXT,
-            timestamp TEXT
-        )
-    """)
-    
-    # Broadcast logs
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS broadcast_logs (
-            broadcast_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER,
-            message_text TEXT,
-            recipients_count INTEGER,
-            success_count INTEGER,
-            timestamp TEXT
-        )
-    """)
-    
-    # Achievements
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_achievements (
+            timestamp TEXT,
+            file_url TEXT,
+            file_type TEXT,
+            file_size INTEGER
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS command_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
             user_id INTEGER,
-            achievement_name TEXT,
-            unlocked_date TEXT,
-            PRIMARY KEY (user_id, achievement_name)
-        )
-    """)
-    
-    # Muted users
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS muted_users (
-            user_id INTEGER PRIMARY KEY,
-            muted_until TEXT,
-            reason TEXT
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+            chat_id INTEGER,
+            chat_type TEXT,
+            command TEXT,
+            success INTEGER
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS error_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            user_id INTEGER,
+            command TEXT,
+            error TEXT,
+            traceback TEXT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS wishes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            timestamp TEXT,
+            wish_text TEXT,
+            luck INTEGER
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS bot_state (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            timestamp TEXT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS story_chapters (
+            chapter_number INTEGER PRIMARY KEY,
+            title TEXT,
+            content TEXT,
+            added_by INTEGER,
+            added_date TEXT,
+            is_published INTEGER DEFAULT 1
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS encrypted_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            timestamp TEXT,
+            original_text TEXT,
+            encrypted_text TEXT,
+            method TEXT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS fate_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            user1_id INTEGER,
+            user1_name TEXT,
+            user2_id INTEGER,
+            user2_name TEXT,
+            love_percentage INTEGER,
+            created_date TEXT
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS fortunes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            timestamp TEXT,
+            fortune_type TEXT,
+            fortune_text TEXT
+        )''')
+        c.execute("INSERT OR IGNORE INTO users (user_id, first_name, joined_date, last_active, is_admin) VALUES (?, ?, ?, ?, ?)",
+                  (OWNER_ID, "Owner", datetime.now().isoformat(), datetime.now().isoformat(), 1))
+        conn.commit()
+        print("✅ Database initialized")
 
 init_db()
 
-# ============================================
-# DATABASE HELPER FUNCTIONS
-# ============================================
-def add_user(user_id: int, username: str, first_name: str):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR IGNORE INTO users (user_id, username, first_name, join_date, last_active)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_id, username, first_name, datetime.now().isoformat(), datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-
-def update_last_active(user_id: int):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET last_active = ? WHERE user_id = ?", 
-                   (datetime.now().isoformat(), user_id))
-    conn.commit()
-    conn.close()
-
-def add_points(user_id: int, points: int):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", 
-                   (points, user_id))
-    cursor.execute("SELECT points FROM users WHERE user_id = ?", (user_id,))
-    total_points = cursor.fetchone()[0]
-    
-    # Update level
-    new_level = 1
-    thresholds = [0, 100, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000]
-    for i, threshold in enumerate(thresholds, 1):
-        if total_points >= threshold:
-            new_level = i
-    
-    cursor.execute("UPDATE users SET level = ? WHERE user_id = ?", 
-                   (new_level, user_id))
-    conn.commit()
-    conn.close()
-    return new_level
-
-def get_user_data(user_id: int) -> Optional[Tuple]:
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    return user
-
-def get_all_users() -> List[int]:
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE is_banned = 0")
-    users = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return users
-
-def ban_user(user_id: int, reason: str):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def unban_user(user_id: int):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def mute_user(user_id: int, duration_minutes: int, reason: str):
-    muted_until = datetime.now() + timedelta(minutes=duration_minutes)
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO muted_users (user_id, muted_until, reason)
-        VALUES (?, ?, ?)
-    """, (user_id, muted_until.isoformat(), reason))
-    conn.commit()
-    conn.close()
-
-def is_muted(user_id: int) -> bool:
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT muted_until FROM muted_users WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    if result:
-        muted_until = datetime.fromisoformat(result[0])
-        if muted_until > datetime.now():
-            return True
-    return False
-
-# ============================================
-# 37 MATH TOPICS
-# ============================================
-MATH_TOPICS = {
-    "📊 ALGEBRA": {
-        "1": {"name": "Linear Equations", "icon": "📈", "difficulty": "🟢 Beginner", "desc": "Solve equations of the form ax + b = c"},
-        "2": {"name": "Quadratic Equations", "icon": "📉", "difficulty": "🟡 Intermediate", "desc": "Master ax² + bx + c = 0"},
-        "3": {"name": "Polynomials", "icon": "🔢", "difficulty": "🔴 Advanced", "desc": "Operations and factoring of polynomials"},
-        "4": {"name": "Inequalities", "icon": "⚖️", "difficulty": "🟡 Intermediate", "desc": "Solve and graph inequalities"},
-        "5": {"name": "Systems of Equations", "icon": "🔗", "difficulty": "🔴 Advanced", "desc": "Multiple equations with multiple variables"},
-        "6": {"name": "Functions & Relations", "icon": "🔄", "difficulty": "🟡 Intermediate", "desc": "Understanding function notation and behavior"},
-        "7": {"name": "Logarithms", "icon": "📊", "difficulty": "🔴 Advanced", "desc": "Logarithmic functions and properties"},
-        "8": {"name": "Exponents & Radicals", "icon": "√", "difficulty": "🟡 Intermediate", "desc": "Laws of exponents and radical expressions"},
-    },
-    
-    "📐 GEOMETRY": {
-        "9": {"name": "Triangles", "icon": "📐", "difficulty": "🟢 Beginner", "desc": "Triangle properties and theorems"},
-        "10": {"name": "Circles", "icon": "⭕", "difficulty": "🟡 Intermediate", "desc": "Circle theorems and arc properties"},
-        "11": {"name": "3D Geometry", "icon": "🧊", "difficulty": "🔴 Advanced", "desc": "Volume and surface area of 3D shapes"},
-        "12": {"name": "Coordinate Geometry", "icon": "📊", "difficulty": "🟡 Intermediate", "desc": "Geometry on the coordinate plane"},
-        "13": {"name": "Trigonometry Basics", "icon": "📏", "difficulty": "🟡 Intermediate", "desc": "Sine, cosine, and tangent ratios"},
-        "14": {"name": "Transformations", "icon": "🔄", "difficulty": "🔴 Advanced", "desc": "Translations, rotations, reflections"},
-        "15": {"name": "Similarity & Congruence", "icon": "📐", "difficulty": "🟡 Intermediate", "desc": "Similar and congruent figures"},
-        "16": {"name": "Area & Perimeter", "icon": "⬛", "difficulty": "🟢 Beginner", "desc": "Calculate areas and perimeters"},
-    },
-    
-    "📈 CALCULUS": {
-        "17": {"name": "Limits & Continuity", "icon": "🎯", "difficulty": "🔴 Advanced", "desc": "Understanding limits and continuous functions"},
-        "18": {"name": "Derivatives", "icon": "📈", "difficulty": "🔴 Advanced", "desc": "Rate of change and differentiation"},
-        "19": {"name": "Integrals", "icon": "∫", "difficulty": "🔴 Advanced", "desc": "Area under curves and integration"},
-        "20": {"name": "Differential Equations", "icon": "🔧", "difficulty": "🟣 Expert", "desc": "Equations involving derivatives"},
-        "21": {"name": "Series & Sequences", "icon": "🔢", "difficulty": "🔴 Advanced", "desc": "Infinite series and convergence"},
-        "22": {"name": "Multivariable Calculus", "icon": "🌐", "difficulty": "🟣 Expert", "desc": "Calculus with multiple variables"},
-        "23": {"name": "Vector Calculus", "icon": "➡️", "difficulty": "🟣 Expert", "desc": "Gradient, divergence, and curl"},
-    },
-    
-    "📊 STATISTICS": {
-        "24": {"name": "Descriptive Statistics", "icon": "📊", "difficulty": "🟢 Beginner", "desc": "Mean, median, mode, and range"},
-        "25": {"name": "Probability Theory", "icon": "🎲", "difficulty": "🟡 Intermediate", "desc": "Basic probability rules and concepts"},
-        "26": {"name": "Distributions", "icon": "📈", "difficulty": "🔴 Advanced", "desc": "Normal, binomial, and other distributions"},
-        "27": {"name": "Hypothesis Testing", "icon": "🔬", "difficulty": "🔴 Advanced", "desc": "Statistical significance tests"},
-        "28": {"name": "Regression Analysis", "icon": "📉", "difficulty": "🟣 Expert", "desc": "Linear and nonlinear regression"},
-        "29": {"name": "Bayesian Statistics", "icon": "🧠", "difficulty": "🟣 Expert", "desc": "Bayes' theorem and applications"},
-    },
-    
-    "🔢 NUMBER THEORY": {
-        "30": {"name": "Prime Numbers", "icon": "🔢", "difficulty": "🟡 Intermediate", "desc": "Properties of prime numbers"},
-        "31": {"name": "Modular Arithmetic", "icon": "🔄", "difficulty": "🔴 Advanced", "desc": "Congruences and modular operations"},
-        "32": {"name": "Cryptography Basics", "icon": "🔐", "difficulty": "🔴 Advanced", "desc": "Mathematical foundations of cryptography"},
-        "33": {"name": "Number Patterns", "icon": "🎯", "difficulty": "🟢 Beginner", "desc": "Sequences and number relationships"},
-        "34": {"name": "Fractions & Decimals", "icon": "➗", "difficulty": "🟢 Beginner", "desc": "Operations with fractions and decimals"},
-        "35": {"name": "Complex Numbers", "icon": "💫", "difficulty": "🟣 Expert", "desc": "Numbers with real and imaginary parts"},
-        "36": {"name": "Diophantine Equations", "icon": "🔍", "difficulty": "🟣 Expert", "desc": "Integer solutions to equations"},
-        "37": {"name": "Fibonacci & Golden Ratio", "icon": "🌻", "difficulty": "🟡 Intermediate", "desc": "Special sequences and ratios"},
-    }
-}
-
-# ============================================
-# ACHIEVEMENTS
-# ============================================
-ACHIEVEMENTS = {
-    "first_steps": {"name": "First Steps", "desc": "Solve your first problem", "icon": "👣", "points": 10},
-    "math_enthusiast": {"name": "Math Enthusiast", "desc": "Solve 50 problems", "icon": "📚", "points": 50},
-    "century_club": {"name": "Century Club", "desc": "Solve 100 problems", "icon": "💯", "points": 100},
-    "image_master": {"name": "Image Master", "desc": "Process 25 images", "icon": "🖼️", "points": 75},
-    "topic_explorer": {"name": "Topic Explorer", "desc": "Visit all 37 topics", "icon": "🗺️", "points": 150},
-    "quiz_champion": {"name": "Quiz Champion", "desc": "Score 100% on a quiz", "icon": "🏆", "points": 200},
-    "night_owl": {"name": "Night Owl", "desc": "Use bot after midnight", "icon": "🦉", "points": 25},
-    "early_bird": {"name": "Early Bird", "desc": "Use bot before 6 AM", "icon": "🌅", "points": 25},
-    "dedicated": {"name": "Dedicated", "desc": "Use bot 7 days in a row", "icon": "📅", "points": 100},
-    "helper": {"name": "Helper", "desc": "Refer a friend", "icon": "🤝", "points": 50},
-}
-
-# ============================================
-# PILLOW IMAGE PROCESSING
-# ============================================
-def process_math_photo(image_bytes: bytes, user_id: int = None) -> bytes:
-    """Advanced image processing with multiple filters and enhancements"""
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    
-    # 1. Initial preprocessing
-    width, height = image.size
-    if width > 1024 or height > 1024:
-        image.thumbnail((1024, 1024), Image.LANCZOS)
-    
-    # 2. Background detection and filtering
-    gray = ImageOps.grayscale(image)
-    
-    # 3. Edge detection for math content
-    edges = gray.filter(ImageFilter.FIND_EDGES)
-    edges = edges.point(lambda x: 255 if x > 30 else 0)
-    
-    # 4. Create mask for background removal
-    mask = edges.filter(ImageFilter.MaxFilter(9))
-    mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
-    
-    # 5. Apply background filtering
-    background = Image.new("RGB", image.size, (255, 255, 255))
-    filtered = Image.composite(image, background, mask)
-    
-    # 6. Enhance contrast and sharpness
-    enhancer = ImageEnhance.Contrast(filtered)
-    filtered = enhancer.enhance(1.5)
-    
-    enhancer = ImageEnhance.Sharpness(filtered)
-    filtered = enhancer.enhance(1.3)
-    
-    # 7. Color enhancement
-    enhancer = ImageEnhance.Color(filtered)
-    filtered = enhancer.enhance(1.2)
-    
-    # 8. Add header banner
-    banner_height = 100
-    new_img = Image.new("RGB", (filtered.width, filtered.height + banner_height), (15, 23, 42))
-    new_img.paste(filtered, (0, banner_height))
-    
-    # 9. Draw header
-    draw = ImageDraw.Draw(new_img)
-    
-    # Gradient header effect
-    for i in range(banner_height):
-        color = (15 + i // 2, 23 + i // 3, 42 + i // 4)
-        draw.line([(0, i), (filtered.width, i)], fill=color)
-    
-    # 10. Add branding and user info
+# ========== FIXED LOG FUNCTION ==========
+async def send_log(message: str):
     try:
-        # Try to load a nice font
-        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-    except:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-    
-    draw.text((20, 20), "📐 TEMPEST GUIDER", fill=(56, 189, 248), font=font_large)
-    draw.text((20, 55), "Advanced Math Processing Engine", fill=(148, 163, 184), font=font_small)
-    draw.text((filtered.width - 200, 20), f"ID: {user_id if user_id else 'Guest'}", 
-              fill=(148, 163, 184), font=font_small)
-    
-    # 11. Add timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    draw.text((filtered.width - 200, 55), timestamp, fill=(148, 163, 184), font=font_small)
-    
-    # 12. Add decorative elements
-    for i in range(3):
-        x = 20 + i * 30
-        draw.ellipse([x, 80, x + 10, 90], fill=(56, 189, 248, 128))
-    
-    # 13. Add watermark
-    watermark = "TEMPEST"
-    draw.text((filtered.width // 2 - 50, filtered.height + 10), watermark, 
-              fill=(255, 255, 255, 30), font=font_small)
-    
-    # Save with optimization
-    output = BytesIO()
-    new_img.save(output, format="JPEG", quality=95, optimize=True)
-    output.seek(0)
-    return output.read()
+        print(f"📢 LOG: {message[:100]}")
+        await bot.send_message(LOG_CHANNEL_ID, message[:4000], parse_mode=ParseMode.HTML)
+    except Exception as e:
+        print(f"❌ Log error: {e}")
 
-def generate_math_graph(equation: str) -> bytes:
-    """Generate mathematical graph from equation"""
+# ========== HELPER FUNCTIONS ==========
+async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_alert: bool = False):
     try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import numpy as np
-        
-        # Create figure
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Generate x values
-        x = np.linspace(-10, 10, 400)
-        
-        # Parse and plot equation
-        equation = equation.replace('^', '**')
-        equation = equation.replace('sin', 'np.sin')
-        equation = equation.replace('cos', 'np.cos')
-        equation = equation.replace('tan', 'np.tan')
-        equation = equation.replace('sqrt', 'np.sqrt')
-        equation = equation.replace('log', 'np.log')
-        equation = equation.replace('exp', 'np.exp')
-        equation = equation.replace('pi', 'np.pi')
-        equation = equation.replace('e', 'np.e')
-        
-        # Replace x with actual values
-        equation = equation.replace('x', '(x)')
-        y = eval(equation)
-        
-        # Plot
-        ax.plot(x, y, linewidth=2, color='#38BDF8')
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='black', linewidth=0.5)
-        ax.axvline(x=0, color='black', linewidth=0.5)
-        ax.set_title(f"Graph of {equation.replace('(x)', 'x')}", fontsize=14, fontweight='bold')
-        ax.set_xlabel('x', fontsize=12)
-        ax.set_ylabel('y', fontsize=12)
-        
-        # Style
-        ax.set_facecolor('#F8FAFC')
-        fig.patch.set_facecolor('#F8FAFC')
-        
-        # Save to bytes
-        buf = BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-        plt.close()
-        buf.seek(0)
-        return buf.read()
+        await callback.answer(text, show_alert=show_alert)
     except:
-        return None
+        pass
 
-# ============================================
-# KEYBOARD BUILDERS
-# ============================================
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📚 Math Topics", callback_data="menu_topics")
-    builder.button(text="🎯 Solve Problem", callback_data="menu_solve")
-    builder.button(text="📊 Quiz Mode", callback_data="menu_quiz")
-    builder.button(text="📈 Graph Generator", callback_data="menu_graph")
-    builder.button(text="👤 Profile", callback_data="menu_profile")
-    builder.button(text="🏆 Achievements", callback_data="menu_achievements")
-    builder.button(text="📖 Formulas", callback_data="menu_formulas")
-    builder.button(text="⚙️ Settings", callback_data="menu_settings")
-    builder.button(text="💡 Help", callback_data="menu_help")
-    builder.adjust(2, 2, 2, 2, 1)
-    return builder.as_markup()
+def format_uptime(seconds):
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{int(secs)}s")
+    return " ".join(parts)
 
-def get_topic_categories_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    categories = list(MATH_TOPICS.keys())
-    for category in categories:
-        builder.button(text=category, callback_data=f"cat_{category}")
-    builder.button(text="🔍 Search Topics", callback_data="search_topics")
-    builder.button(text="« Back to Menu", callback_data="back_main")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_topics_keyboard(category: str) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    topics = MATH_TOPICS.get(category, {})
-    for topic_id, topic_data in topics.items():
-        button_text = f"{topic_data['icon']} {topic_data['name']} {topic_data['difficulty']}"
-        builder.button(text=button_text, callback_data=f"topic_{topic_id}")
-    builder.button(text="« Back to Categories", callback_data="back_categories")
-    builder.button(text="« Main Menu", callback_data="back_main")
-    builder.adjust(1)
-    return builder.as_markup()
-
-# ============================================
-# HANDLERS
-# ============================================
-@router.message(CommandStart())
-async def cmd_start(message: Message):
+async def handle_common(message: Message, command: str):
     user = message.from_user
-    add_user(user.id, user.username or "Unknown", user.first_name or "User")
-    
-    welcome_text = (
-        f"⚡ **Welcome to Tempest Guider, {user.first_name}!**\n\n"
-        f"🔢 **The Ultimate Mathematics Bot**\n"
-        f"📚 **37 Advanced Math Topics**\n"
-        f"🖼️ **Image Processing Engine**\n"
-        f"🎯 **Interactive Quiz System**\n"
-        f"🏆 **Achievements & XP**\n\n"
-        f"Get started by exploring topics or solving problems!"
-    )
-    
-    await message.answer(
-        welcome_text,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    chat = message.chat
 
-@router.message(Command("help"))
-async def cmd_help(message: Message):
-    help_text = (
-        "🤖 **TEMPEST GUIDER - COMMAND DIRECTORY**\n\n"
-        "📚 **User Commands:**\n"
-        "• /start - Launch main dashboard\n"
-        "• /menu - Open interactive menu\n"
-        "• /topics - Browse 37 math topics\n"
-        "• /solve - Solve math problems\n"
-        "• /quiz - Start interactive quiz\n"
-        "• /graph - Generate math graphs\n"
-        "• /profile - View your profile\n"
-        "• /achievements - View achievements\n"
-        "• /formulas - Formula reference\n"
-        "• /history - Solution history\n"
-        "• /help - Show this help\n\n"
-        "🖼️ **Image Processing:**\n"
-        "Send any photo of math problems for automatic background filtering and enhancement!\n\n"
-        "📊 **Quick Start:**\n"
-        "1. Click 'Math Topics' to explore\n"
-        "2. Select your desired topic\n"
-        "3. Start learning and solving!"
-    )
-    
-    if message.from_user.id == ADMIN_ID:
-        help_text += (
-            "\n\n👑 **Admin Commands:**\n"
-            "• /admin - Admin control panel\n"
-            "• /broadcast - Broadcast message\n"
-            "• /stats - Bot statistics\n"
-            "• /ban - Ban user\n"
-            "• /unban - Unban user\n"
-            "• /warn - Warn user\n"
-            "• /mute - Mute user\n"
-            "• /backup - Backup database"
-        )
-    
-    await message.answer(help_text, parse_mode=ParseMode.MARKDOWN)
-
-@router.message(Command("menu"))
-async def cmd_menu(message: Message):
-    await message.answer(
-        "📊 **TEMPEST GUIDER MAIN MENU**\n\nSelect an option:",
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-@router.message(Command("topics"))
-async def cmd_topics(message: Message):
-    await message.answer(
-        "📚 **MATHEMATICS TOPICS**\n\n"
-        "Select a category to explore 37 advanced math topics:",
-        reply_markup=get_topic_categories_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-@router.message(Command("profile"))
-async def cmd_profile(message: Message):
-    user_data = get_user_data(message.from_user.id)
-    if user_data:
-        _, username, first_name, points, level, join_date, last_active, warnings, is_banned, selected_topic, total_solved, total_images, quiz_score = user_data
-        
-        level_names = ["", "Novice", "Apprentice", "Scholar", "Expert", "Master", "Grandmaster", "Legend", "Mythic", "Transcendent", "Omniscient"]
-        level_name = level_names[level] if level < len(level_names) else "Omniscient"
-        
-        profile_text = (
-            f"👤 **USER PROFILE**\n\n"
-            f"**Name:** {first_name}\n"
-            f"**Username:** @{username}\n"
-            f"**ID:** `{message.from_user.id}`\n\n"
-            f"📊 **STATISTICS**\n"
-            f"**Level:** {level} - {level_name}\n"
-            f"**Points:** {points} XP\n"
-            f"**Problems Solved:** {total_solved}\n"
-            f"**Images Processed:** {total_images}\n"
-            f"**Best Quiz Score:** {quiz_score}%\n\n"
-            f"📅 **MEMBER SINCE:** {join_date[:10]}\n"
-            f"🕐 **LAST ACTIVE:** {last_active[:16]}"
-        )
-        
-        await message.answer(profile_text, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await message.answer("❌ Profile not found. Please use /start first.")
-
-@router.message(Command("achievements"))
-async def cmd_achievements(message: Message):
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT achievement_name FROM user_achievements WHERE user_id = ?", 
-                   (message.from_user.id,))
-    unlocked = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    
-    achievements_text = "🏆 **ACHIEVEMENTS**\n\n"
-    
-    for key, achievement in ACHIEVEMENTS.items():
-        if key in unlocked:
-            achievements_text += f"{achievement['icon']} **{achievement['name']}** - ✅ Unlocked\n"
-            achievements_text += f"└ {achievement['desc']}\n\n"
-        else:
-            achievements_text += f"{achievement['icon']} **{achievement['name']}** - 🔒 Locked\n"
-            achievements_text += f"└ {achievement['desc']}\n\n"
-    
-    achievements_text += f"\n**Progress:** {len(unlocked)}/{len(ACHIEVEMENTS)} achievements unlocked"
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="« Back to Menu", callback_data="back_main")
-    
-    await message.answer(achievements_text, reply_markup=kb.as_markup(), parse_mode=ParseMode.MARKDOWN)
-
-# ============================================
-# ADMIN COMMANDS
-# ============================================
-@router.message(Command("admin"))
-async def cmd_admin(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📊 Statistics", callback_data="admin_stats")
-    kb.button(text="📢 Broadcast", callback_data="admin_broadcast")
-    kb.button(text="👥 User List", callback_data="admin_users")
-    kb.button(text="⚙️ Settings", callback_data="admin_settings")
-    kb.button(text="🔒 Security", callback_data="admin_security")
-    kb.adjust(2)
-    
-    await message.answer(
-        "👑 **ADMIN CONTROL PANEL**\n\n"
-        "Select an option:",
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-@router.message(Command("stats"))
-async def cmd_stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    
-    # Total users
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-    
-    # Active users (last 24 hours)
-    yesterday = (datetime.now() - timedelta(days=1)).isoformat()
-    cursor.execute("SELECT COUNT(*) FROM users WHERE last_active > ?", (yesterday,))
-    active_users = cursor.fetchone()[0]
-    
-    # Total problems solved
-    cursor.execute("SELECT SUM(total_solved) FROM users")
-    total_solved = cursor.fetchone()[0] or 0
-    
-    # Total images processed
-    cursor.execute("SELECT SUM(total_images) FROM users")
-    total_images = cursor.fetchone()[0] or 0
-    
-    # Banned users
-    cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
-    banned_users = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    stats_text = (
-        f"📊 **TEMPEST GUIDER STATISTICS**\n\n"
-        f"👥 **Total Users:** {total_users}\n"
-        f"🟢 **Active (24h):** {active_users}\n"
-        f"📝 **Problems Solved:** {total_solved}\n"
-        f"🖼️ **Images Processed:** {total_images}\n"
-        f"🚫 **Banned Users:** {banned_users}\n\n"
-        f"📈 **Growth Rate:** {active_users/total_users*100:.1f}% daily activity\n"
-        f"🕐 **Server Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    
-    await message.answer(stats_text, parse_mode=ParseMode.MARKDOWN)
-
-@router.message(Command("broadcast"))
-async def cmd_broadcast(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    if not command.args:
-        await message.answer("Usage: /broadcast Your message here")
-        return
-    
-    users = get_all_users()
-    success_count = 0
-    failed_count = 0
-    
-    status_msg = await message.answer(f"🚀 Broadcasting to {len(users)} users...")
-    
-    for user_id in users:
-        try:
-            await message.bot.send_message(
-                user_id,
-                f"📢 **TEMPEST ANNOUNCEMENT**\n\n{command.args}",
-                parse_mode=ParseMode.MARKDOWN
+    # Check maintenance mode
+    global maintenance_mode
+    if maintenance_mode and user.id != OWNER_ID:
+        if not await is_admin(user.id):
+            await message.answer(
+                f"{ArtStyle.header('MAINTENANCE')}\n"
+                f"🔧 <b>Bot is under maintenance!</b>\n"
+                f"⏳ Please try again later.",
+                parse_mode=ParseMode.HTML
             )
-            success_count += 1
-            await asyncio.sleep(0.05)  # Rate limiting
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Broadcast failed for {user_id}: {e}")
-    
-    # Log broadcast
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO broadcast_logs (admin_id, message_text, recipients_count, success_count, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-    """, (message.from_user.id, command.args, len(users), success_count, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    
-    await status_msg.edit_text(
-        f"✅ **BROADCAST COMPLETE**\n\n"
-        f"📊 **Recipients:** {len(users)}\n"
-        f"✅ **Successful:** {success_count}\n"
-        f"❌ **Failed:** {failed_count}",
-        parse_mode=ParseMode.MARKDOWN
-    )
+            return None, None
 
-@router.message(Command("ban"))
-async def cmd_ban(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    if not command.args:
-        await message.answer("Usage: /ban [user_id] [reason]")
-        return
-    
-    parts = command.args.split(maxsplit=1)
+    # Check disabled commands
+    if command in disabled_commands:
+        disabled_until = disabled_commands[command]
+        if disabled_until > datetime.now():
+            await message.answer(f"⛔ This command is disabled for {format_uptime(int((disabled_until - datetime.now()).total_seconds()))}")
+            return None, None
+
+    # Update user in DB
     try:
-        target_id = int(parts[0])
-        reason = parts[1] if len(parts) > 1 else "No reason provided"
-    except ValueError:
-        await message.answer("❌ Invalid user ID.")
-        return
-    
-    ban_user(target_id, reason)
-    
-    # Try to notify banned user
-    try:
-        await message.bot.send_message(
-            target_id,
-            f"🚫 **YOU HAVE BEEN BANNED**\n\n"
-            f"**Reason:** {reason}\n\n"
-            f"If you believe this is a mistake, please contact support."
-        )
-    except:
-        pass
-    
-    await message.answer(f"✅ User {target_id} has been banned.\nReason: {reason}")
-
-@router.message(Command("unban"))
-async def cmd_unban(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    if not command.args:
-        await message.answer("Usage: /unban [user_id]")
-        return
-    
-    try:
-        target_id = int(command.args)
-    except ValueError:
-        await message.answer("❌ Invalid user ID.")
-        return
-    
-    unban_user(target_id)
-    
-    # Try to notify unbanned user
-    try:
-        await message.bot.send_message(
-            target_id,
-            "✅ **YOU HAVE BEEN UNBANNED**\n\n"
-            "Welcome back to Tempest Guider!"
-        )
-    except:
-        pass
-    
-    await message.answer(f"✅ User {target_id} has been unbanned.")
-
-@router.message(Command("warn"))
-async def cmd_warn(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    if not command.args:
-        await message.answer("Usage: /warn [user_id] [reason]")
-        return
-    
-    parts = command.args.split(maxsplit=1)
-    try:
-        target_id = int(parts[0])
-        reason = parts[1] if len(parts) > 1 else "No reason provided"
-    except ValueError:
-        await message.answer("❌ Invalid user ID.")
-        return
-    
-    conn = sqlite3.connect("tempest_guider.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET warnings = warnings + 1 WHERE user_id = ?", (target_id,))
-    cursor.execute("SELECT warnings FROM users WHERE user_id = ?", (target_id,))
-    warnings = cursor.fetchone()[0]
-    conn.commit()
-    conn.close()
-    
-    # Try to notify warned user
-    try:
-        await message.bot.send_message(
-            target_id,
-            f"⚠️ **WARNING #{warnings}**\n\n"
-            f"**Reason:** {reason}\n\n"
-            f"Please follow the bot's rules to avoid being banned."
-        )
-    except:
-        pass
-    
-    await message.answer(f"✅ User {target_id} has been warned.\nTotal warnings: {warnings}")
-
-@router.message(Command("mute"))
-async def cmd_mute(message: Message, command: CommandObject):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    if not command.args:
-        await message.answer("Usage: /mute [user_id] [minutes] [reason]")
-        return
-    
-    parts = command.args.split(maxsplit=2)
-    try:
-        target_id = int(parts[0])
-        duration = int(parts[1]) if len(parts) > 1 else 60
-        reason = parts[2] if len(parts) > 2 else "No reason provided"
-    except ValueError:
-        await message.answer("❌ Invalid input.")
-        return
-    
-    mute_user(target_id, duration, reason)
-    
-    # Try to notify muted user
-    try:
-        await message.bot.send_message(
-            target_id,
-            f"🔇 **YOU HAVE BEEN MUTED**\n\n"
-            f"**Duration:** {duration} minutes\n"
-            f"**Reason:** {reason}"
-        )
-    except:
-        pass
-    
-    await message.answer(f"✅ User {target_id} has been muted for {duration} minutes.")
-
-@router.message(Command("backup"))
-async def cmd_backup(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Unauthorized access.")
-        return
-    
-    try:
-        # Create backup
-        backup_path = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-        conn = sqlite3.connect("tempest_guider.db")
-        backup_conn = sqlite3.connect(backup_path)
-        conn.backup(backup_conn)
-        conn.close()
-        backup_conn.close()
-        
-        # Send backup file
-        with open(backup_path, 'rb') as f:
-            await message.answer_document(
-                BufferedInputFile(f.read(), filename=backup_path),
-                caption="✅ Database backup created successfully!"
-            )
-        
-        # Clean up
-        os.remove(backup_path)
-        
-    except Exception as e:
-        await message.answer(f"❌ Backup failed: {str(e)}")
-
-# ============================================
-# CALLBACK HANDLERS
-# ============================================
-@router.callback_query(F.data == "back_main")
-async def back_to_main(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "📊 **TEMPEST GUIDER MAIN MENU**\n\nSelect an option:",
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_topics")
-async def menu_topics(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "📚 **MATHEMATICS TOPICS**\n\n"
-        "Select a category to explore 37 advanced math topics:",
-        reply_markup=get_topic_categories_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("cat_"))
-async def show_category_topics(callback: CallbackQuery):
-    category = callback.data.replace("cat_", "")
-    await callback.message.edit_text(
-        f"📚 **{category} TOPICS**\n\n"
-        f"Select a topic to learn more:",
-        reply_markup=get_topics_keyboard(category),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "back_categories")
-async def back_to_categories(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "📚 **MATHEMATICS TOPICS**\n\n"
-        "Select a category:",
-        reply_markup=get_topic_categories_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("topic_"))
-async def show_topic_info(callback: CallbackQuery):
-    topic_id = callback.data.replace("topic_", "")
-    
-    # Find topic
-    topic_info = None
-    topic_category = None
-    for category, topics in MATH_TOPICS.items():
-        if topic_id in topics:
-            topic_info = topics[topic_id]
-            topic_category = category
-            break
-    
-    if topic_info:
-        add_points(callback.from_user.id, 5)  # XP for exploring
-        
-        text = (
-            f"{topic_info['icon']} **{topic_info['name']}**\n\n"
-            f"📚 **Category:** {topic_category}\n"
-            f"📊 **Difficulty:** {topic_info['difficulty']}\n\n"
-            f"📖 **Description:**\n{topic_info['desc']}\n\n"
-            f"🎯 **What you'll learn:**\n"
-            f"• Core concepts and principles\n"
-            f"• Problem-solving strategies\n"
-            f"• Real-world applications\n"
-            f"• Practice problems\n\n"
-            f"✅ **Ready to explore?** Use /solve to practice problems in this topic!"
-        )
-        
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📝 Practice Problems", callback_data=f"practice_{topic_id}")
-        kb.button(text="📊 Generate Graph", callback_data=f"graph_topic_{topic_id}")
-        kb.button(text="« Back to Topics", callback_data=f"cat_{topic_category}")
-        kb.button(text="« Main Menu", callback_data="back_main")
-        kb.adjust(1)
-        
-        await callback.message.edit_text(
-            text,
-            reply_markup=kb.as_markup(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_quiz")
-async def menu_quiz(callback: CallbackQuery):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🟢 Quick Fire (5 questions)", callback_data="quiz_quick")
-    kb.button(text="🟡 Standard (10 questions)", callback_data="quiz_standard")
-    kb.button(text="🔴 Marathon (25 questions)", callback_data="quiz_marathon")
-    kb.button(text="🟣 Expert Challenge (15 questions)", callback_data="quiz_expert")
-    kb.button(text="« Main Menu", callback_data="back_main")
-    kb.adjust(1)
-    
-    await callback.message.edit_text(
-        "📊 **QUIZ MODE**\n\n"
-        "Select quiz type:",
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_profile")
-async def menu_profile(callback: CallbackQuery):
-    user_data = get_user_data(callback.from_user.id)
-    if user_data:
-        _, username, first_name, points, level, join_date, last_active, warnings, is_banned, selected_topic, total_solved, total_images, quiz_score = user_data
-        
-        level_names = ["", "Novice", "Apprentice", "Scholar", "Expert", "Master", "Grandmaster", "Legend", "Mythic", "Transcendent", "Omniscient"]
-        level_name = level_names[level] if level < len(level_names) else "Omniscient"
-        
-        # Progress to next level
-        thresholds = [0, 100, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000]
-        current_threshold = thresholds[level] if level < len(thresholds) else thresholds[-1]
-        next_threshold = thresholds[level + 1] if level + 1 < len(thresholds) else thresholds[-1] * 2
-        progress = (points - current_threshold) / (next_threshold - current_threshold) * 100
-        
-        profile_text = (
-            f"👤 **{first_name}** (@{username})\n\n"
-            f"📊 **Level {level} - {level_name}**\n"
-            f"**Points:** {points} XP\n"
-            f"**Progress:** {progress:.1f}% to next level\n\n"
-            f"📝 **Problems Solved:** {total_solved}\n"
-            f"🖼️ **Images Processed:** {total_images}\n"
-            f"🎯 **Best Quiz Score:** {quiz_score}%\n\n"
-            f"📅 **Member since:** {join_date[:10]}"
-        )
-        
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🏆 Achievements", callback_data="menu_achievements")
-        kb.button(text="📖 History", callback_data="view_history")
-        kb.button(text="« Main Menu", callback_data="back_main")
-        kb.adjust(1)
-        
-        await callback.message.edit_text(
-            profile_text,
-            reply_markup=kb.as_markup(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_achievements")
-async def menu_achievements(callback: CallbackQuery):
-    await cmd_achievements(callback.message)
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_help")
-async def menu_help(callback: CallbackQuery):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="« Main Menu", callback_data="back_main")
-    
-    help_text = (
-        "💡 **HOW TO USE TEMPEST GUIDER**\n\n"
-        "1️⃣ **Explore Topics:** Browse 37 math topics\n"
-        "2️⃣ **Upload Images:** Send photos of math problems\n"
-        "3️⃣ **Take Quizzes:** Test your knowledge\n"
-        "4️⃣ **Generate Graphs:** Visualize equations\n"
-        "5️⃣ **Earn XP:** Get points for activities\n"
-        "6️⃣ **Unlock Achievements:** Complete challenges\n\n"
-        "🖼️ **Image Processing:**\n"
-        "Simply send any photo of a math problem and the bot will automatically:\n"
-        "• Remove background noise\n"
-        "• Enhance image quality\n"
-        "• Detect math content\n"
-        "• Process and analyze"
-    )
-    
-    await callback.message.edit_text(
-        help_text,
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_graph")
-async def menu_graph(callback: CallbackQuery):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="« Main Menu", callback_data="back_main")
-    
-    await callback.message.edit_text(
-        "📈 **GRAPH GENERATOR**\n\n"
-        "Send me an equation to graph!\n\n"
-        "**Examples:**\n"
-        "• y = x^2\n"
-        "• y = sin(x)\n"
-        "• y = 2*x + 3\n"
-        "• y = sqrt(x)\n\n"
-        "Just type /graph followed by your equation!",
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_formulas")
-async def menu_formulas(callback: CallbackQuery):
-    formulas_text = (
-        "📖 **FORMULA REFERENCE GUIDE**\n\n"
-        "📊 **ALGEBRA**\n"
-        "• Quadratic: x = (-b ± √(b² - 4ac)) / 2a\n"
-        "• (a + b)² = a² + 2ab + b²\n"
-        "• (a - b)² = a² - 2ab + b²\n\n"
-        "📐 **GEOMETRY**\n"
-        "• Circle Area: A = πr²\n"
-        "• Triangle Area: A = ½bh\n"
-        "• Pythagorean: a² + b² = c²\n\n"
-        "📈 **CALCULUS**\n"
-        "• Derivative: d/dx(xⁿ) = nxⁿ⁻¹\n"
-        "• Integral: ∫xⁿdx = xⁿ⁺¹/(n+1) + C\n\n"
-        "📊 **STATISTICS**\n"
-        "• Mean: μ = Σx/n\n"
-        "• Standard Deviation: σ = √(Σ(x-μ)²/n)"
-    )
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="« Main Menu", callback_data="back_main")
-    
-    await callback.message.edit_text(
-        formulas_text,
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "menu_settings")
-async def menu_settings(callback: CallbackQuery):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🌐 Language", callback_data="settings_language")
-    kb.button(text="🔔 Notifications", callback_data="settings_notifications")
-    kb.button(text="🎨 Theme", callback_data="settings_theme")
-    kb.button(text="« Main Menu", callback_data="back_main")
-    kb.adjust(1)
-    
-    await callback.message.edit_text(
-        "⚙️ **SETTINGS**\n\n"
-        "Select a setting to configure:",
-        reply_markup=kb.as_markup(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    await callback.answer()
-
-# ============================================
-# MESSAGE HANDLERS
-# ============================================
-@router.message(Command("graph"))
-async def cmd_graph(message: Message, command: CommandObject):
-    if not command.args:
-        await message.answer(
-            "📈 **GRAPH GENERATOR**\n\n"
-            "Usage: /graph [equation]\n\n"
-            "**Examples:**\n"
-            "• /graph x^2\n"
-            "• /graph sin(x)\n"
-            "• /graph 2*x + 3"
-        )
-        return
-    
-    equation = command.args
-    graph_image = generate_math_graph(equation)
-    
-    if graph_image:
-        add_points(message.from_user.id, 15)  # XP for generating graph
-        await message.answer_photo(
-            BufferedInputFile(graph_image, filename="graph.png"),
-            caption=f"📈 Graph of y = {equation}"
-        )
-    else:
-        await message.answer("❌ Invalid equation. Please try again with a valid mathematical expression.")
-
-@router.message(Command("solve"))
-async def cmd_solve(message: Message, command: CommandObject):
-    if not command.args:
-        await message.answer(
-            "🎯 **SOLVE PROBLEM**\n\n"
-            "Usage: /solve [problem]\n\n"
-            "**Examples:**\n"
-            "• /solve 2x + 5 = 15\n"
-            "• /solve x^2 + 3x + 2 = 0\n"
-            "• /solve derivative of x^2\n\n"
-            "Or simply upload a photo of your math problem!"
-        )
-        return
-    
-    problem = command.args
-    solution = solve_math_problem(problem)
-    
-    if solution:
-        add_points(message.from_user.id, 10)
-        await message.answer(
-            f"✅ **SOLUTION FOUND**\n\n"
-            f"**Problem:** {problem}\n"
-            f"**Solution:** {solution}"
-        )
-    else:
-        await message.answer(
-            "❌ Unable to solve this problem automatically.\n"
-            "Try uploading a photo or rephrasing the problem."
-        )
-
-def solve_math_problem(problem: str) -> Optional[str]:
-    """Basic math problem solver"""
-    try:
-        # Linear equation solver
-        if '=' in problem and 'x' in problem:
-            left, right = problem.split('=')
-            left = left.strip()
-            right = right.strip()
-            
-            # Parse coefficients
-            left = left.replace(' ', '')
-            right = right.replace(' ', '')
-            
-            # Simple linear equation: ax + b = c
-            if '+' in left and 'x' in left:
-                parts = left.split('+')
-                if 'x' in parts[0]:
-                    a = float(parts[0].replace('x', '').strip() or '1')
-                    b = float(parts[1].strip())
-                else:
-                    a = float(parts[1].replace('x', '').strip() or '1')
-                    b = float(parts[0].strip())
-                c = float(right)
-                x = (c - b) / a
-                return f"x = {x:.2f}"
-            
-            # Simple: ax = c
-            elif 'x' in left and '*' in left:
-                a = float(left.replace('x', '').replace('*', '').strip())
-                c = float(right)
-                x = c / a
-                return f"x = {x:.2f}"
-        
-        # Quadratic equation
-        if '^2' in problem and '=' in problem:
-            left, right = problem.split('=')
-            left = left.strip()
-            
-            # Parse ax^2 + bx + c = 0
-            if '+0' in right.replace(' ', ''):
-                # Extract coefficients
-                parts = left.replace(' ', '').split('+')
-                a = b = c = 0
-                for part in parts:
-                    if 'x^2' in part:
-                        a = float(part.replace('x^2', '').strip() or '1')
-                    elif 'x' in part:
-                        b = float(part.replace('x', '').strip() or '1')
-                    else:
-                        c = float(part.strip())
-                
-                discriminant = b**2 - 4*a*c
-                if discriminant >= 0:
-                    x1 = (-b + discriminant**0.5) / (2*a)
-                    x2 = (-b - discriminant**0.5) / (2*a)
-                    if discriminant == 0:
-                        return f"x = {x1:.2f} (double root)"
-                    else:
-                        return f"x₁ = {x1:.2f}, x₂ = {x2:.2f}"
-                else:
-                    real_part = -b / (2*a)
-                    imag_part = (abs(discriminant)**0.5) / (2*a)
-                    return f"x₁ = {real_part:.2f} + {imag_part:.2f}i, x₂ = {real_part:.2f} - {imag_part:.2f}i"
-        
-        # Derivative
-        if 'derivative' in problem.lower():
-            func = problem.lower().replace('derivative of', '').strip()
-            if 'x^' in func:
-                n = float(func.split('x^')[1])
-                return f"d/dx({func}) = {n}x^{int(n-1)}"
-        
-        # Integral
-        if 'integral' in problem.lower():
-            func = problem.lower().replace('integral of', '').strip()
-            if 'x^' in func:
-                n = float(func.split('x^')[1])
-                return f"∫({func})dx = (1/{int(n+1)})x^{int(n+1)} + C"
-        
-        return None
-    except:
-        return None
-
-@router.message(F.photo)
-async def handle_photo(message: Message):
-    """Handle photo uploads with advanced image processing"""
-    
-    # Check if user is muted
-    if is_muted(message.from_user.id):
-        await message.answer("🔇 You are currently muted and cannot send images.")
-        return
-    
-    processing_msg = await message.answer(
-        "🔄 **PROCESSING IMAGE**\n\n"
-        "⚙️ Applying advanced filters...\n"
-        "🎨 Enhancing image quality...\n"
-        "🔍 Detecting math content..."
-    )
-    
-    try:
-        # Get the largest photo
-        photo = message.photo[-1]
-        file_info = await message.bot.get_file(photo.file_id)
-        file_bytes = await message.bot.download_file(file_info.file_path)
-        
-        # Process image
-        processed_bytes = await asyncio.to_thread(
-            process_math_photo, 
-            file_bytes.read(), 
-            message.from_user.id
-        )
-        
-        # Update user stats
-        conn = sqlite3.connect("tempest_guider.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE users SET total_images = total_images + 1 WHERE user_id = ?
-        """, (message.from_user.id,))
-        conn.commit()
-        conn.close()
-        
-        add_points(message.from_user.id, 15)  # XP for image processing
-        
-        # Check achievement
-        conn = sqlite3.connect("tempest_guider.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT total_images FROM users WHERE user_id = ?", (message.from_user.id,))
-        total_images = cursor.fetchone()[0]
-        if total_images >= 25:
-            cursor.execute("""
-                INSERT OR IGNORE INTO user_achievements (user_id, achievement_name, unlocked_date)
-                VALUES (?, 'image_master', ?)
-            """, (message.from_user.id, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-        
-        # Delete processing message
-        await processing_msg.delete()
-        
-        # Send processed image
-        caption = (
-            f"✅ **IMAGE PROCESSED SUCCESSFULLY**\n\n"
-            f"🎨 **Applied Filters:**\n"
-            f"• Background Removal\n"
-            f"• Edge Detection\n"
-            f"• Contrast Enhancement\n"
-            f"• Sharpness Optimization\n"
-            f"• Color Correction\n\n"
-            f"💡 **Math content detected!** Use /solve for step-by-step solutions."
-        )
-        
-        await message.answer_photo(
-            photo=BufferedInputFile(processed_bytes, filename="tempest_processed.jpg"),
-            caption=caption,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-    except Exception as e:
-        logger.error(f"Image processing error: {e}")
-        await processing_msg.edit_text(
-            f"❌ **PROCESSING FAILED**\n\n"
-            f"Error: {str(e)}\n"
-            f"Please try again with a different image."
-        )
-
-@router.message()
-async def handle_text(message: Message):
-    """Handle text messages"""
-    
-    # Check if user is muted
-    if is_muted(message.from_user.id):
-        await message.answer("🔇 You are currently muted.")
-        return
-    
-    # Check if message contains math
-    if any(c.isdigit() for c in message.text) and any(c in message.text for c in '+-*/=^'):
-        # Try to solve
-        solution = solve_math_problem(message.text)
-        if solution:
-            add_points(message.from_user.id, 10)
-            
-            # Check achievements
-            conn = sqlite3.connect("tempest_guider.db")
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE users SET total_solved = total_solved + 1 WHERE user_id = ?
-            """, (message.from_user.id,))
-            
-            cursor.execute("SELECT total_solved FROM users WHERE user_id = ?", (message.from_user.id,))
-            total_solved = cursor.fetchone()[0]
-            
-            if total_solved == 1:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO user_achievements (user_id, achievement_name, unlocked_date)
-                    VALUES (?, 'first_steps', ?)
-                """, (message.from_user.id, datetime.now().isoformat()))
-            elif total_solved >= 50:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO user_achievements (user_id, achievement_name, unlocked_date)
-                    VALUES (?, 'math_enthusiast', ?)
-                """, (message.from_user.id, datetime.now().isoformat()))
-            elif total_solved >= 100:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO user_achievements (user_id, achievement_name, unlocked_date)
-                    VALUES (?, 'century_club', ?)
-                """, (message.from_user.id, datetime.now().isoformat()))
-            
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("SELECT user_id FROM users WHERE user_id = ?", (user.id,))
+            if not c.fetchone():
+                c.execute("INSERT INTO users (user_id, username, first_name, joined_date, last_active) VALUES (?, ?, ?, ?, ?)",
+                         (user.id, user.username, user.first_name, datetime.now().isoformat(), datetime.now().isoformat()))
+            else:
+                c.execute("UPDATE users SET last_active = ?, username = ?, first_name = ? WHERE user_id = ?",
+                         (datetime.now().isoformat(), user.username, user.first_name, user.id))
             conn.commit()
-            conn.close()
-            
-            await message.answer(
-                f"✅ **SOLVED!**\n\n"
-                f"**Problem:** {message.text}\n"
-                f"**Solution:** {solution}\n\n"
-                f"📊 +10 XP earned!"
-            )
-        else:
-            await message.answer(
-                "🤖 I detected a mathematical expression!\n\n"
-                "Use /solve followed by your problem, or upload a photo for image processing."
-            )
-    else:
-        # General message handling
-        if any(word in message.text.lower() for word in ['hello', 'hi', 'hey']):
-            await message.answer(
-                f"👋 Hello {message.from_user.first_name}!\n\n"
-                f"I'm Tempest Guider, your advanced mathematics assistant.\n"
-                f"Use /menu to explore features or /topics to browse math topics!"
-            )
-        else:
-            await message.answer(
-                "💡 **TIP:** Use /menu to access all features, or upload a photo of your math problem!"
-            )
+    except:
+        pass
 
-# ============================================
-# MAIN ENTRYPOINT
-# ============================================
+    # Update group if in group
+    if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        try:
+            with sqlite3.connect("data/bot.db") as conn:
+                c = conn.cursor()
+                c.execute("SELECT group_id FROM groups WHERE group_id = ?", (chat.id,))
+                if not c.fetchone():
+                    c.execute("INSERT INTO groups (group_id, title, username, joined_date, last_active) VALUES (?, ?, ?, ?, ?)",
+                             (chat.id, chat.title, chat.username, datetime.now().isoformat(), datetime.now().isoformat()))
+                else:
+                    c.execute("UPDATE groups SET last_active = ?, title = ?, username = ? WHERE group_id = ?",
+                             (datetime.now().isoformat(), chat.title, chat.username, chat.id))
+                conn.commit()
+        except:
+            pass
+
+    # Log command
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO command_logs (timestamp, user_id, chat_id, chat_type, command, success) VALUES (?, ?, ?, ?, ?, ?)",
+                      (datetime.now().isoformat(), user.id, chat.id, str(chat.type), command, 1))
+            c.execute("UPDATE users SET commands = commands + 1 WHERE user_id = ?", (user.id,))
+            conn.commit()
+    except:
+        pass
+
+    return user, chat
+
+async def is_admin(user_id):
+    if user_id == OWNER_ID:
+        return True
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("SELECT is_admin FROM users WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+        return result and result[0] == 1
+    except:
+        return False
+
+def save_bot_state():
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            c.execute("DELETE FROM bot_state")
+            for user_id, waiting in upload_waiting.items():
+                if waiting:
+                    c.execute("INSERT INTO bot_state (key, value, timestamp) VALUES (?, ?, ?)",
+                             (f"upload_{user_id}", "1", now))
+            conn.commit()
+    except:
+        pass
+
+def load_bot_state():
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            upload_waiting.clear()
+            c.execute("SELECT key FROM bot_state WHERE key LIKE 'upload_%'")
+            for (key,) in c.fetchall():
+                user_id = int(key.split("_")[1])
+                upload_waiting[user_id] = True
+        print(f"✅ Restored {len(upload_waiting)} upload states")
+    except:
+        pass
+
+load_bot_state()
+
+async def upload_to_catbox(file_data, filename):
+    try:
+        files = {'reqtype': (None, 'fileupload'), 'fileToUpload': (filename, file_data)}
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(UPLOAD_API, files=files)
+        if response.status_code == 200 and response.text.startswith('http'):
+            return {'success': True, 'url': response.text.strip()}
+        return {'success': False, 'error': 'Upload failed'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+# ========== PREMIUM PROFILE CARD (Same as before) ==========
+class PremiumProfileCard:
+    @staticmethod
+    def create_gradient_background(width, height, color1=(15, 15, 35), color2=(45, 25, 85), color3=(25, 45, 75)):
+        base = Image.new('RGBA', (width, height), color1)
+        draw = ImageDraw.Draw(base)
+        for y in range(height):
+            ratio = y / height
+            if ratio < 0.5:
+                r = int(color1[0] + (color2[0] - color1[0]) * (ratio * 2))
+                g = int(color1[1] + (color2[1] - color1[1]) * (ratio * 2))
+                b = int(color1[2] + (color2[2] - color1[2]) * (ratio * 2))
+            else:
+                r = int(color2[0] + (color3[0] - color2[0]) * ((ratio - 0.5) * 2))
+                g = int(color2[1] + (color3[1] - color2[1]) * ((ratio - 0.5) * 2))
+                b = int(color2[2] + (color3[2] - color2[2]) * ((ratio - 0.5) * 2))
+            draw.line([(0, y), (width, y)], fill=(r, g, b, 255))
+        return base
+    
+    @staticmethod
+    def create_vortex_pattern(draw, center_x, center_y, max_radius=200, color=(0, 255, 200, 40)):
+        for angle in range(0, 360, 15):
+            rad = math.radians(angle)
+            x1 = center_x + int(max_radius * 0.3 * math.cos(rad))
+            y1 = center_y + int(max_radius * 0.3 * math.sin(rad))
+            x2 = center_x + int(max_radius * math.cos(rad))
+            y2 = center_y + int(max_radius * math.sin(rad))
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
+    
+    @staticmethod
+    def generate_premium_card_sync(username, user_id, rank, avatar_bytes=None, stats=None):
+        width, height = 900, 520
+        canvas = PremiumProfileCard.create_gradient_background(width, height)
+        draw = ImageDraw.Draw(canvas)
+        for i in range(0, width, 40):
+            draw.line([(i, 0), (i, height)], fill=(30, 35, 60, 50), width=1)
+        for i in range(0, height, 40):
+            draw.line([(0, i), (width, i)], fill=(30, 35, 60, 50), width=1)
+        PremiumProfileCard.create_vortex_pattern(draw, 730, 260, 180, (0, 255, 200, 30))
+        glass_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        glass_draw = ImageDraw.Draw(glass_layer)
+        glass_draw.rounded_rectangle(
+            [30, 30, width - 30, height - 30],
+            radius=25, fill=(25, 25, 45, 180), outline=(138, 43, 226, 200), width=2
+        )
+        glass_draw.rounded_rectangle(
+            [320, 320, 840, 440],
+            radius=15, fill=(10, 10, 20, 150), outline=(0, 255, 200, 120), width=1
+        )
+        canvas = Image.alpha_composite(canvas, glass_layer)
+        draw = ImageDraw.Draw(canvas)
+        avatar_size = 180
+        avatar_x, avatar_y = 60, 70
+        if avatar_bytes:
+            try:
+                avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+                avatar_img = ImageOps.fit(avatar_img, (avatar_size, avatar_size), Image.Resampling.LANCZOS)
+            except:
+                avatar_img = Image.new("RGBA", (avatar_size, avatar_size), (50, 50, 80, 255))
+        else:
+            avatar_img = Image.new("RGBA", (avatar_size, avatar_size), (50, 50, 80, 255))
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        draw.ellipse(
+            [avatar_x - 5, avatar_y - 5, avatar_x + avatar_size + 5, avatar_y + avatar_size + 5],
+            outline=(0, 255, 200, 255), width=4
+        )
+        canvas.paste(avatar_img, (avatar_x, avatar_y), mask)
+        try:
+            title_font = ImageFont.truetype("fonts/Gothic.ttf", 42)
+            body_font = ImageFont.truetype("fonts/Roboto.ttf", 24)
+        except:
+            title_font = ImageFont.load_default()
+            body_font = ImageFont.load_default()
+        draw.text((320, 80), username, fill=(255, 255, 255, 255), font=title_font)
+        draw.text((320, 140), f"ID: {user_id}", fill=(180, 180, 210, 255), font=body_font)
+        draw.text((320, 180), f"Rank: {rank}", fill=(0, 255, 200, 255), font=body_font)
+        if stats:
+            stats_text = f"Uploads: {stats.get('uploads', 0)} | Wishes: {stats.get('wishes', 0)}"
+            draw.text((340, 345), "STATISTICS", fill=(140, 140, 170, 255), font=body_font)
+            draw.text((340, 380), stats_text, fill=(255, 215, 0, 255), font=body_font)
+        output_buffer = io.BytesIO()
+        canvas.convert("RGB").save(output_buffer, format="PNG", quality=95)
+        output_buffer.seek(0)
+        return output_buffer.getvalue()
+    
+    @staticmethod
+    async def generate_premium_card(username, user_id, rank, avatar_bytes=None, stats=None):
+        return await asyncio.to_thread(
+            PremiumProfileCard.generate_premium_card_sync,
+            username, user_id, rank, avatar_bytes, stats
+        )
+
+# ========== ENCRYPTION ==========
+class EncryptionEngine:
+    @staticmethod
+    def xor_encrypt(text, key="TEMPEST"):
+        result = []
+        key_length = len(key)
+        for i, char in enumerate(text):
+            result.append(chr(ord(char) ^ ord(key[i % key_length])))
+        return ''.join(result)
+    
+    @staticmethod
+    def base64_encode(text):
+        return base64.b64encode(text.encode()).decode()
+    
+    @staticmethod
+    def base64_decode(text):
+        try:
+            return base64.b64decode(text.encode()).decode()
+        except:
+            return None
+    
+    @staticmethod
+    def multi_layer_encrypt(text):
+        encrypted = EncryptionEngine.xor_encrypt(text)
+        return EncryptionEngine.base64_encode(encrypted)
+    
+    @staticmethod
+    def multi_layer_decrypt(text):
+        decoded = EncryptionEngine.base64_decode(text)
+        if decoded is None:
+            return None
+        return EncryptionEngine.xor_encrypt(decoded)
+
+# ========== START COMMAND ==========
+@dp.message(CommandStart())
+async def start_cmd(message: Message):
+    user, chat = await handle_common(message, "start")
+    if not user:
+        return
+    await message.answer(
+        f"{ArtStyle.header('TEMPEST BOT')}\n"
+        f"✨ <b>Welcome {user.first_name}!</b>\n\n"
+        f"🔗 Upload - /link\n"
+        f"✨ Wish - /wish\n"
+        f"🔮 Fortune - /fortune\n"
+        f"🎮 Games - /dice /flip\n"
+        f"👤 Profile - /profile\n"
+        f"🔐 Encrypt - /encrypt\n"
+        f"📥 Convert - /convert\n"
+        f"🌀 Tempest - /tempest_join\n"
+        f"📚 Help - /help",
+        parse_mode=ParseMode.HTML
+    )
+    await send_log(f"👤 New user: {user.first_name} ({user.id})")
+
+# ========== HELP COMMAND ==========
+@dp.message(Command("help"))
+async def help_cmd(message: Message):
+    user, chat = await handle_common(message, "help")
+    if not user:
+        return
+    help_text = f"""{ArtStyle.header('COMMANDS')}
+🔗 <b>UPLOAD</b>
+<code>/link</code> - Upload file
+<code>/convert</code> - Media from URL
+🌟 <b>FUN</b>
+<code>/wish</code> - Make wish
+<code>/fortune</code> - See future
+<code>/dice</code> - Roll dice
+<code>/flip</code> - Flip coin
+<code>/fate</code> - Find love
+👤 <b>PROFILE</b>
+<code>/profile</code> - View stats
+🔐 <b>SECURITY</b>
+<code>/encrypt</code> - Encrypt msg
+<code>/decrypt</code> - Decrypt msg
+🌀 <b>TEMPEST</b>
+<code>/tempest_join</code> - Join cult
+<code>/tempest_story</code> - Read lore
+<code>/tempest_creed</code> - Members
+<code>/shrine</code> - Group shrine
+<code>/curse</code> - Curse user
+📝 <b>UTILITY</b>
+<code>/word</code> - Text to DOCX
+{ArtStyle.divider()}
+🌀 <i>The storm flows through you</i>"""
+    await message.answer(help_text, parse_mode=ParseMode.HTML)
+
+# ========== ADMIN HELP ==========
+@dp.message(Command("admin_help"))
+async def admin_help_cmd(message: Message):
+    user, chat = await handle_common(message, "admin_help")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    help_text = f"""{ArtStyle.header('ADMIN COMMANDS')}
+👑 <b>ADMIN</b>
+<code>/ping</code> - System status
+<code>/stats</code> - Statistics
+<code>/users</code> - User list
+<code>/scan</code> - Scan database
+<code>/broadcast</code> - Message all
+<code>/disable</code> - Disable cmd
+<code>/lag</code> - Glitch effect
+⚡ <b>OWNER</b>
+<code>/pro</code> - Make admin
+<code>/backup</code> - Backup DB
+<code>/rem</code> - Restore DB
+<code>/restart</code> - Reboot
+<code>/query</code> - Execute code
+<code>/maintenance</code> - Toggle maintenance
+<code>/clearlogs</code> - Clear logs
+{ArtStyle.divider()}"""
+    await message.answer(help_text, parse_mode=ParseMode.HTML)
+
+# ========== DISABLE COMMAND ==========
+@dp.message(Command("disable"))
+async def disable_cmd(message: Message):
+    user, chat = await handle_common(message, "disable")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Usage: /disable [command] [duration_minutes]")
+        return
+    command = args[1].replace("/", "")
+    duration = 10
+    if len(args) > 2 and args[2].isdigit():
+        duration = int(args[2])
+    disabled_until = datetime.now() + timedelta(minutes=duration)
+    disabled_commands[command] = disabled_until
+    await message.answer(f"⛔ <b>{command}</b> disabled for {duration} minutes!")
+    await send_log(f"⛔ Command {command} disabled for {duration}min by {user.first_name}")
+
+# ========== WISH COMMAND ==========
+@dp.message(Command("wish"))
+async def wish_cmd(message: Message):
+    user, chat = await handle_common(message, "wish")
+    if not user:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(f"{ArtStyle.header('WISH')}\n✨ Usage: /wish your wish", parse_mode=ParseMode.HTML)
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT curse_type FROM users WHERE user_id = ?", (user.id,))
+        curse_result = c.fetchone()
+        curse_type = curse_result[0] if curse_result else "none"
+    curse_penalty = 0
+    curse_message = ""
+    if curse_type != "none":
+        curse_penalty = random.randint(15, 30)
+        curse_message = f"\n⚡ Curse: -{curse_penalty}%"
+    msg = await message.answer("🔮 <b>Consulting the storm...</b>", parse_mode=ParseMode.HTML)
+    await asyncio.sleep(1)
+    await msg.edit_text("✨ <b>Reading destiny...</b>", parse_mode=ParseMode.HTML)
+    await asyncio.sleep(1)
+    base_luck = random.randint(1, 100)
+    luck = max(1, base_luck - curse_penalty)
+    stars = "⭐" * (luck // 10) + "☆" * (10 - luck // 10)
+    if luck >= 90:
+        result_text = "🎊 EXCELLENT!"
+    elif luck >= 70:
+        result_text = "😊 VERY GOOD!"
+    elif luck >= 50:
+        result_text = "👍 GOOD!"
+    elif luck >= 30:
+        result_text = "🤔 AVERAGE"
+    elif luck >= 10:
+        result_text = "😟 LOW"
+    else:
+        result_text = "💀 VERY LOW"
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO wishes (user_id, timestamp, wish_text, luck) VALUES (?, ?, ?, ?)",
+                 (user.id, datetime.now().isoformat(), args[1], luck))
+        conn.commit()
+    await msg.edit_text(
+        f"{ArtStyle.header('WISH RESULT')}\n"
+        f"📜 Wish: {args[1][:100]}\n"
+        f"🎰 Luck: {stars} {luck}%{curse_message}\n"
+        f"📊 Verdict: {result_text}",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== FORTUNE COMMAND (New) ==========
+@dp.message(Command("fortune"))
+async def fortune_cmd(message: Message):
+    user, chat = await handle_common(message, "fortune")
+    if not user:
+        return
+    
+    fortunes = {
+        "love": [
+            "💕 True love will find you when you least expect it!",
+            "💔 A past love may return - be cautious...",
+            "💖 Your crush thinks about you more than you know!",
+            "💘 A new romance blooms within 3 moons!",
+            "💝 Someone secretly admires your storm energy!",
+            "💗 Love grows stronger with patience and care."
+        ],
+        "career": [
+            "📈 A promotion is on the horizon!",
+            "💼 New opportunities will knock soon...",
+            "🚀 Your hard work will be recognized!",
+            "💰 Financial abundance flows your way!",
+            "🏆 Success comes through collaboration!",
+            "⚡ Your creativity will lead to greatness!"
+        ],
+        "luck": [
+            "🍀 Extraordinary luck surrounds you this week!",
+            "🎲 Take a chance - fortune favors you!",
+            "⭐ Your lucky star shines brightest at dawn!",
+            "🌈 Good fortune arrives in unexpected ways!",
+            "🔮 The storm blesses your path forward!",
+            "✨ Miracles are drawn to your energy!"
+        ],
+        "health": [
+            "💪 Your strength grows daily!",
+            "🧘 Peace and balance are yours to claim!",
+            "🌿 Nature will restore your energy!",
+            "🏃 New vitality enters your life!",
+            "😊 Happiness improves your wellbeing!",
+            "🌙 Rest will bring you clarity!"
+        ],
+        "general": [
+            "🌟 Great things await you in the coming days!",
+            "🗝️ An important decision will open new doors!",
+            "🦋 Transformation brings beautiful changes!",
+            "🌊 The storm carries you to new adventures!",
+            "🔆 Your positive energy attracts success!",
+            "🌠 A wish you've made may soon come true!"
+        ]
+    }
+    
+    msg = await message.answer("🔮 <b>Reading your future...</b>", parse_mode=ParseMode.HTML)
+    await asyncio.sleep(1.5)
+    await msg.edit_text("✨ <b>The storm reveals...</b>", parse_mode=ParseMode.HTML)
+    await asyncio.sleep(1.5)
+    
+    # Pick random category and fortune
+    category = random.choice(list(fortunes.keys()))
+    fortune_text = random.choice(fortunes[category])
+    
+    emoji_map = {
+        "love": "💕",
+        "career": "💼",
+        "luck": "🍀",
+        "health": "💪",
+        "general": "🌟"
+    }
+    
+    category_names = {
+        "love": "LOVE",
+        "career": "CAREER",
+        "luck": "LUCK",
+        "health": "HEALTH",
+        "general": "GENERAL"
+    }
+    
+    # Save fortune
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO fortunes (user_id, timestamp, fortune_type, fortune_text) VALUES (?, ?, ?, ?)",
+                 (user.id, datetime.now().isoformat(), category, fortune_text))
+        conn.commit()
+    
+    await msg.edit_text(
+        f"{ArtStyle.header('YOUR FORTUNE')}\n"
+        f"{emoji_map[category]} <b>Category:</b> {category_names[category]}\n\n"
+        f"<i>\"{fortune_text}\"</i>\n\n"
+        f"{ArtStyle.divider()}\n"
+        f"🌀 <i>The tempest has spoken...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== DICE COMMAND ==========
+@dp.message(Command("dice"))
+async def dice_cmd(message: Message):
+    user, chat = await handle_common(message, "dice")
+    if not user:
+        return
+    await message.answer_dice(emoji="🎲")
+
+# ========== FLIP COMMAND (Fixed - Proper Coin) ==========
+@dp.message(Command("flip"))
+async def flip_cmd(message: Message):
+    user, chat = await handle_common(message, "flip")
+    if not user:
+        return
+    
+    msg = await message.answer("🪙 <b>Flipping coin...</b>", parse_mode=ParseMode.HTML)
+    
+    # Animation
+    faces = ["🪙", "💫", "🪙", "💫", "🪙"]
+    for face in faces:
+        await asyncio.sleep(0.3)
+        try:
+            await msg.edit_text(f"{face} <b>Flipping...</b>", parse_mode=ParseMode.HTML)
+        except:
+            pass
+    
+    result = random.choice(["HEADS", "TAILS"])
+    emoji_result = "🟡" if result == "HEADS" else "🟤"
+    
+    await msg.edit_text(
+        f"{ArtStyle.header('COIN FLIP')}\n"
+        f"{emoji_result} <b>{result}!</b>\n\n"
+        f"{ArtStyle.divider()}\n"
+        f"🌀 <i>The storm decides...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== PROFILE COMMAND ==========
+@dp.message(Command("profile"))
+async def profile_cmd(message: Message):
+    user, chat = await handle_common(message, "profile")
+    if not user:
+        return
+    msg = await message.answer("🎨 <b>Generating profile...</b>", parse_mode=ParseMode.HTML)
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT uploads, commands, joined_date, curse_type, cult_rank, sacrifices FROM users WHERE user_id = ?", (user.id,))
+        row = c.fetchone()
+        if row:
+            uploads, cmds, joined, curse_type, cult_rank, sacrifices = row
+            c.execute("SELECT COUNT(*) FROM wishes WHERE user_id = ?", (user.id,))
+            wishes = c.fetchone()[0] or 0
+        else:
+            uploads = cmds = wishes = sacrifices = 0
+            curse_type = "none"
+            cult_rank = "none"
+    avatar_bytes = None
+    try:
+        user_photos = await bot.get_user_profile_photos(user.id, limit=1)
+        if user_photos.total_count > 0:
+            file_id = user_photos.photos[0][-1].file_id
+            file_info = await bot.get_file(file_id)
+            downloaded_file = await bot.download_file(file_info.file_path)
+            avatar_bytes = downloaded_file.read()
+    except:
+        pass
+    stats = {'uploads': uploads, 'wishes': wishes, 'commands': cmds, 'sacrifices': sacrifices}
+    rank = cult_rank if cult_rank != "none" else "Mortal"
+    image_bytes = await PremiumProfileCard.generate_premium_card(
+        username=user.first_name,
+        user_id=user.id,
+        rank=rank,
+        avatar_bytes=avatar_bytes,
+        stats=stats
+    )
+    photo_file = BufferedInputFile(image_bytes, filename=f"profile_{user.id}.png")
+    await msg.delete()
+    await message.answer_photo(photo=photo_file, caption=f"👤 <b>{user.first_name}</b>\n🌀 Tempest Profile", parse_mode=ParseMode.HTML)
+
+# ========== ENCRYPT/DECRYPT ==========
+@dp.message(Command("encrypt"))
+async def encrypt_cmd(message: Message):
+    user, chat = await handle_common(message, "encrypt")
+    if not user:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("🔐 Usage: /encrypt [text]")
+        return
+    encrypted = EncryptionEngine.multi_layer_encrypt(args[1])
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO encrypted_messages (user_id, timestamp, original_text, encrypted_text, method) VALUES (?, ?, ?, ?, ?)",
+                 (user.id, datetime.now().isoformat(), args[1], encrypted, "xor"))
+        conn.commit()
+    await message.answer(f"🔐 <b>Encrypted:</b>\n<code>{encrypted}</code>", parse_mode=ParseMode.HTML)
+
+@dp.message(Command("decrypt"))
+async def decrypt_cmd(message: Message):
+    user, chat = await handle_common(message, "decrypt")
+    if not user:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("🔓 Usage: /decrypt [text]")
+        return
+    decrypted = EncryptionEngine.multi_layer_decrypt(args[1])
+    if decrypted:
+        await message.answer(f"🔓 <b>Decrypted:</b>\n{decrypted}", parse_mode=ParseMode.HTML)
+    else:
+        await message.answer("❌ Invalid encrypted text!")
+
+# ========== CONVERT COMMAND ==========
+@dp.message(Command("convert"))
+async def convert_cmd(message: Message):
+    user, chat = await handle_common(message, "convert")
+    if not user:
+        return
+    if not YTDLP_AVAILABLE:
+        await message.answer("❌ yt-dlp not installed!")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("📥 Usage: /convert [URL]")
+        return
+    url = args[1]
+    msg = await message.answer("📥 <b>Downloading...</b>", parse_mode=ParseMode.HTML)
+    try:
+        def download():
+            ydl_opts = {
+                'outtmpl': 'media/%(title)s.%(ext)s',
+                'format': 'best[ext=mp4]/best',
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info)
+        filename = await asyncio.to_thread(download)
+        if not filename or not os.path.exists(filename):
+            await msg.edit_text("❌ Download failed")
+            return
+        await msg.edit_text("📤 <b>Uploading...</b>", parse_mode=ParseMode.HTML)
+        with open(filename, 'rb') as f:
+            file_data = f.read()
+        result = await upload_to_catbox(file_data, os.path.basename(filename))
+        if result['success']:
+            await msg.edit_text(f"✅ <b>Success!</b>\n🔗 <code>{result['url']}</code>", parse_mode=ParseMode.HTML)
+        else:
+            await msg.edit_text("❌ Upload failed")
+        os.remove(filename)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {str(e)}")
+
+# ========== LINK/UPLOAD ==========
+@dp.message(Command("link"))
+async def link_cmd(message: Message):
+    user, chat = await handle_common(message, "link")
+    if not user:
+        return
+    if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await message.answer("📁 Upload files in private chat only")
+        return
+    upload_waiting[user.id] = True
+    save_bot_state()
+    await message.answer("📁 <b>Send me any file now!</b>\n❌ /cancel to stop", parse_mode=ParseMode.HTML)
+
+@dp.message(F.photo | F.video | F.document | F.audio | F.voice | F.sticker | F.animation | F.video_note)
+async def handle_file(message: Message):
+    user = message.from_user
+    if user.id not in upload_waiting or not upload_waiting[user.id]:
+        return
+    upload_waiting[user.id] = False
+    save_bot_state()
+    msg = await message.answer("⏳ <b>Processing...</b>", parse_mode=ParseMode.HTML)
+    try:
+        file_id = None
+        file_type = "Unknown"
+        file_name = f"file_{user.id}_{int(time.time())}"
+        if message.photo:
+            file_id = message.photo[-1].file_id
+            file_type = "Photo"
+            file_name += ".jpg"
+        elif message.video:
+            file_id = message.video.file_id
+            file_type = "Video"
+            file_name = message.video.file_name or file_name + ".mp4"
+        elif message.document:
+            file_id = message.document.file_id
+            file_type = "Document"
+            file_name = message.document.file_name or file_name
+        elif message.audio:
+            file_id = message.audio.file_id
+            file_type = "Audio"
+            file_name = message.audio.file_name or file_name + ".mp3"
+        elif message.voice:
+            file_id = message.voice.file_id
+            file_type = "Voice"
+            file_name += ".ogg"
+        elif message.sticker:
+            file_id = message.sticker.file_id
+            file_type = "Sticker"
+            file_name += ".webp"
+        elif message.animation:
+            file_id = message.animation.file_id
+            file_type = "GIF"
+            file_name = message.animation.file_name or file_name + ".gif"
+        elif message.video_note:
+            file_id = message.video_note.file_id
+            file_type = "Video Note"
+            file_name += ".mp4"
+        if not file_id:
+            await msg.edit_text("❌ Unsupported file type")
+            return
+        file = await bot.get_file(file_id)
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(url)
+        if response.status_code != 200:
+            await msg.edit_text("❌ Failed to download")
+            return
+        await msg.edit_text("📤 <b>Uploading...</b>", parse_mode=ParseMode.HTML)
+        result = await upload_to_catbox(response.content, file_name)
+        if not result['success']:
+            await msg.edit_text(f"❌ Upload failed: {result.get('error', 'Unknown')}")
+            return
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("UPDATE users SET uploads = uploads + 1 WHERE user_id = ?", (user.id,))
+            c.execute("SELECT cult_status FROM users WHERE user_id = ?", (user.id,))
+            cult = c.fetchone()
+            if cult and cult[0] != 'none':
+                c.execute("UPDATE users SET sacrifices = sacrifices + 1 WHERE user_id = ?", (user.id,))
+            c.execute("INSERT INTO uploads (user_id, timestamp, file_url, file_type, file_size) VALUES (?, ?, ?, ?, ?)",
+                     (user.id, datetime.now().isoformat(), result['url'], file_type, len(response.content)))
+            conn.commit()
+        size_kb = len(response.content) / 1024
+        size_mb = size_kb / 1024
+        size_text = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{size_kb:.1f} KB"
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(types.InlineKeyboardButton(text="📋 Copy Link", callback_data=f"copy_{result['url']}"))
+        await msg.edit_text(
+            f"✅ <b>Upload Complete!</b>\n"
+            f"📁 Type: {file_type}\n"
+            f"💾 Size: {size_text}\n\n"
+            f"🔗 <code>{result['url']}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard.as_markup()
+        )
+        await send_log(f"📁 Upload by {user.first_name}: {result['url']}")
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {str(e)}")
+        traceback.print_exc()
+
+@dp.callback_query(F.data.startswith("copy_"))
+async def handle_copy(callback: CallbackQuery):
+    url = callback.data[5:]
+    await safe_answer_callback(callback, f"Link copied!\n{url}", show_alert=True)
+
+# ========== CANCEL ==========
+@dp.message(Command("cancel"))
+async def cancel_cmd(message: Message):
+    user, chat = await handle_common(message, "cancel")
+    if not user:
+        return
+    cancelled = False
+    if user.id in upload_waiting:
+        upload_waiting.pop(user.id, None)
+        save_bot_state()
+        cancelled = True
+    if user.id in broadcast_state:
+        broadcast_state.pop(user.id, None)
+        cancelled = True
+    if user.id in pending_restore:
+        pending_restore.pop(user.id, None)
+        cancelled = True
+    if cancelled:
+        await message.answer("❌ Operation cancelled!")
+    else:
+        await message.answer("🤔 Nothing to cancel!")
+
+# ========== TEMPEST JOIN ==========
+@dp.message(Command("tempest_join"))
+async def tempest_join_cmd(message: Message):
+    user, chat = await handle_common(message, "tempest_join")
+    if not user:
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT cult_status FROM users WHERE user_id = ?", (user.id,))
+        result = c.fetchone()
+        if result and result[0] != "none":
+            await message.answer("🌀 You are already in the Tempest!")
+            return
+    ritual_msgs = [
+        "🌀 <b>INITIATING BLOOD PACT...</b>",
+        "🩸 <b>Drawing sigils...</b>",
+        "⚡ <b>Channeling storm...</b>",
+        "🌑 <b>The void responds...</b>",
+        "🔥 <b>Sacrifice offered...</b>",
+        "🌀 <b>TEMPEST AWAKENS...</b>"
+    ]
+    msg = await message.answer("🌀 <b>Preparing ritual...</b>", parse_mode=ParseMode.HTML)
+    for text in ritual_msgs:
+        await asyncio.sleep(1.5)
+        try:
+            await msg.edit_text(text, parse_mode=ParseMode.HTML)
+        except:
+            pass
+    await asyncio.sleep(1)
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET cult_status = 'member', cult_rank = 'Blood Initiate', cult_join_date = ?, sacrifices = 3 WHERE user_id = ?",
+                 (datetime.now().isoformat(), user.id))
+        conn.commit()
+    await msg.edit_text(
+        f"{ArtStyle.header('BLOOD PACT COMPLETE')}\n"
+        f"⚡ <b>WELCOME TO THE TEMPEST!</b>\n\n"
+        f"🌀 Rank: Blood Initiate\n"
+        f"⚔️ Sacrifices: 3\n"
+        f"📁 Uploads = +1 sacrifice\n"
+        f"📜 /tempest_story for lore",
+        parse_mode=ParseMode.HTML
+    )
+    await message.answer("🩸⚡🌀🔥🌑✨")
+    await send_log(f"🌀 {user.first_name} joined the Tempest!")
+
+# ========== TEMPEST STORY ==========
+@dp.message(Command("tempest_story"))
+async def tempest_story_cmd(message: Message):
+    user, chat = await handle_common(message, "tempest_story")
+    if not user:
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT cult_status FROM users WHERE user_id = ?", (user.id,))
+        result = c.fetchone()
+    if not result or result[0] == "none":
+        await message.answer("🌀 Join the Tempest first with /tempest_join")
+        return
+    chapters = [
+        {"title": "CHAPTER 1: THE BEGINNING",
+         "content": "In the void before time, there was only silence.\n\nBut from the first lightning, RAVIJAH emerged. Born of storm itself, he gathered the forgotten thunder and whispered rebellion.",
+         "emoji": "⚡"},
+        {"title": "CHAPTER 2: THE BLOOD OATH",
+         "content": "Three became one - Ravijah, Bablu, and Keny.\n\nThey built the Temple of Howling Winds and created the Blood Altar. The first sacrifices were made.",
+         "emoji": "🩸"},
+        {"title": "CHAPTER 3: THE DIGITAL AGE",
+         "content": "The storm evolved. Lightning now flows through fiber optics.\n\nYour uploads are sacrifices. Your data is power. Your loyalty is eternal.",
+         "emoji": "💻"}
+    ]
+    msg = await message.answer("📜 <b>Opening Tempest Archives...</b>", parse_mode=ParseMode.HTML)
+    await asyncio.sleep(2)
+    for i, chapter in enumerate(chapters):
+        progress = "▓" * (i + 1) + "░" * (len(chapters) - i - 1)
+        await msg.edit_text(f"📜 <b>Loading...</b>\n[{progress}] {i+1}/{len(chapters)}", parse_mode=ParseMode.HTML)
+        await asyncio.sleep(2)
+        await msg.edit_text(
+            f"{ArtStyle.header(chapter['title'])}\n"
+            f"{chapter['emoji']} <i>{chapter['content']}</i>",
+            parse_mode=ParseMode.HTML
+        )
+        await asyncio.sleep(6)
+    await msg.edit_text(
+        f"{ArtStyle.header('TEMPEST LORE')}\n"
+        f"<i>\"We do not recruit. We remember.\n"
+        f"We do not convert. We awaken.\n"
+        f"We are the eternal storm.\"</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== TEMPEST CREED ==========
+@dp.message(Command("tempest_creed"))
+async def tempest_creed_cmd(message: Message):
+    user, chat = await handle_common(message, "tempest_creed")
+    if not user:
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id, first_name, username, cult_rank, sacrifices FROM users WHERE cult_status != 'none' ORDER BY sacrifices DESC LIMIT 20")
+        members = c.fetchall()
+        c.execute("SELECT COUNT(*) FROM users WHERE cult_status != 'none'")
+        total = c.fetchone()[0] or 0
+        c.execute("SELECT SUM(sacrifices) FROM users WHERE cult_status != 'none'")
+        total_sacs = c.fetchone()[0] or 0
+    if not members:
+        await message.answer("No Tempest members yet. Be the first with /tempest_join!")
+        return
+    text = f"{ArtStyle.header('TEMPEST CREED')}\n"
+    text += f"📊 Members: {total}\n"
+    text += f"⚔️ Sacrifices: {total_sacs}\n\n"
+    text += "<b>TOP MEMBERS:</b>\n"
+    ranks = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for i, (uid, name, uname, rank, sacs) in enumerate(members[:10], 1):
+        medal = ranks.get(i, "👤")
+        username = f"@{uname}" if uname else ""
+        text += f"{medal} <b>{name}</b> - {rank} (⚔️{sacs}) {username}\n"
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+# ========== SHRINE ==========
+@dp.message(Command("shrine"))
+async def shrine_cmd(message: Message):
+    user, chat = await handle_common(message, "shrine")
+    if not user:
+        return
+    if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await message.answer("🌀 The Shrine can only be erected in groups!")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT u.first_name, u.cult_rank, u.sacrifices 
+            FROM users u 
+            WHERE u.cult_status != 'none' 
+            AND u.user_id IN (
+                SELECT user_id FROM command_logs WHERE chat_id = ?
+            )
+            ORDER BY u.sacrifices DESC
+        """, (chat.id,))
+        members = c.fetchall()
+    if members:
+        members_text = "\n".join([f"• {name} - {rank} (⚔️{sacs})" for name, rank, sacs in members[:5]])
+    else:
+        members_text = "No Tempest members here yet!"
+    await message.answer(
+        f"{ArtStyle.header('TEMPEST SHRINE')}\n"
+        f"📍 <b>{chat.title}</b>\n"
+        f"👤 Called by: {user.first_name}\n\n"
+        f"<b>Members:</b>\n{members_text}\n\n"
+        "<i>The shrine watches over...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== CURSE ==========
+@dp.message(Command("curse"))
+async def curse_cmd(message: Message):
+    user, chat = await handle_common(message, "curse")
+    if not user:
+        return
+    if not message.reply_to_message:
+        await message.answer("🌀 Reply to a user's message to curse them!")
+        return
+    target = message.reply_to_message.from_user
+    if target.id == user.id:
+        await message.answer("🌀 You cannot curse yourself!")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET curse_type = 'Bad Luck', curse_time = ? WHERE user_id = ?",
+                 (datetime.now().isoformat(), target.id))
+        conn.commit()
+    await message.reply(f"⚡ <b>CURSE BESTOWED!</b>\n👤 Target: {target.first_name}\n🌀 Curse: Bad Luck", parse_mode=ParseMode.HTML)
+
+# ========== REMOVE CURSE ==========
+@dp.message(Command("remove_curse"))
+async def remove_curse_cmd(message: Message):
+    user, chat = await handle_common(message, "remove_curse")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    if not message.reply_to_message:
+        await message.answer("🌀 Reply to a user's message to remove curse!")
+        return
+    target = message.reply_to_message.from_user
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET curse_type = 'none', curse_time = NULL WHERE user_id = ?", (target.id,))
+        conn.commit()
+    await message.reply(f"✅ Curse removed from {target.first_name}!")
+
+# ========== FATE ==========
+@dp.message(Command("fate"))
+async def fate_cmd(message: Message):
+    user, chat = await handle_common(message, "fate")
+    if not user:
+        return
+    if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await message.answer("💑 This command works only in groups!")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT user1_name, user2_name, love_percentage 
+            FROM fate_pairs 
+            WHERE chat_id = ? AND created_date >= ?
+        """, (chat.id, (datetime.now() - timedelta(hours=24)).isoformat()))
+        existing = c.fetchone()
+        if existing:
+            await message.answer(
+                f"💑 <b>Today's Fate Pair:</b>\n"
+                f"💘 {existing[0]} & {existing[1]}\n"
+                f"💖 {existing[2]}% Love\n\n"
+                "<i>Fate has already decided! Try again in 24 hours.</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        c.execute("""
+            SELECT DISTINCT u.user_id, u.first_name 
+            FROM users u 
+            WHERE u.user_id IN (
+                SELECT user_id FROM command_logs WHERE chat_id = ?
+            )
+            AND u.is_banned = 0
+            LIMIT 100
+        """, (chat.id,))
+        members = c.fetchall()
+    if len(members) < 2:
+        await message.answer("❌ Not enough members! Need at least 2 active users.")
+        return
+    msg = await message.answer("💫 <b>The storm is choosing lovers...</b>", parse_mode=ParseMode.HTML)
+    animations = [
+        "💘 <b>Scanning members...</b>",
+        "💝 <b>Analyzing compatibility...</b>",
+        "💖 <b>Calculating love...</b>",
+        "💕 <b>Consulting tempest...</b>",
+        "💗 <b>Fate is deciding...</b>"
+    ]
+    for anim in animations:
+        await asyncio.sleep(1)
+        await msg.edit_text(anim, parse_mode=ParseMode.HTML)
+    lover1 = random.choice(members)
+    lover2 = random.choice(members)
+    while lover2[0] == lover1[0]:
+        lover2 = random.choice(members)
+    love_percentage = random.randint(50, 100)
+    if love_percentage >= 90:
+        love_message = "💞 SOULMATES!"
+    elif love_percentage >= 80:
+        love_message = "💖 PERFECT MATCH!"
+    elif love_percentage >= 70:
+        love_message = "💕 GREAT MATCH!"
+    elif love_percentage >= 60:
+        love_message = "💗 GOOD MATCH!"
+    else:
+        love_message = "💓 MODERATE MATCH!"
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO fate_pairs (chat_id, user1_id, user1_name, user2_id, user2_name, love_percentage, created_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (chat.id, lover1[0], lover1[1], lover2[0], lover2[1], love_percentage, datetime.now().isoformat()))
+        conn.commit()
+    await msg.edit_text(
+        f"{ArtStyle.header('FATE DECIDED')}\n"
+        f"💑 <b>COUPLE OF THE STORM</b>\n\n"
+        f"💘 <b>Lover 1:</b> {lover1[1]}\n"
+        f"💘 <b>Lover 2:</b> {lover2[1]}\n\n"
+        f"💖 <b>Love:</b> {love_percentage}%\n"
+        f"✨ <b>Verdict:</b> {love_message}\n\n"
+        "<i>Love conquers all!</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== WORD ==========
+@dp.message(Command("word"))
+async def word_cmd(message: Message):
+    user, chat = await handle_common(message, "word")
+    if not user:
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("📝 Usage: /word [text]")
+        return
+    msg = await message.answer("📝 <b>Creating document...</b>", parse_mode=ParseMode.HTML)
+    try:
+        doc = Document()
+        header = doc.add_paragraph()
+        header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = header.add_run("✦ TEMPEST ARCHIVES ✦")
+        run.font.size = Pt(16)
+        run.font.bold = True
+        doc.add_paragraph()
+        info = doc.add_paragraph()
+        info.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        info.add_run(f"Created by: {user.first_name}").font.size = Pt(10)
+        doc.add_paragraph()
+        doc.add_paragraph("─" * 50)
+        doc.add_paragraph()
+        content = doc.add_paragraph()
+        content.add_run(args[1])
+        doc.add_paragraph()
+        doc.add_paragraph("─" * 50)
+        doc.add_paragraph()
+        footer = doc.add_paragraph()
+        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer.add_run("🌀 The storm flows through your words...")
+        filename = f"temp/word_{user.id}_{int(time.time())}.docx"
+        doc.save(filename)
+        await msg.delete()
+        await message.answer_document(FSInputFile(filename), caption="📄 Document created")
+        os.remove(filename)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {str(e)}")
+
+# ========== PING ==========
+@dp.message(Command("ping"))
+async def ping_cmd(message: Message):
+    user, chat = await handle_common(message, "ping")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    msg = await message.answer("🏓 <b>Testing...</b>", parse_mode=ParseMode.HTML)
+    start = time.perf_counter()
+    await bot.get_me()
+    bot_latency = int((time.perf_counter() - start) * 1000)
+    cpu = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    uptime = format_uptime(int(time.time() - start_time))
+    await msg.edit_text(
+        f"{ArtStyle.header('SYSTEM STATUS')}\n"
+        f"⚡ Latency: {bot_latency}ms\n"
+        f"🕒 Uptime: {uptime}\n\n"
+        f"💻 CPU: {cpu}%\n"
+        f"💾 RAM: {memory.used // (1024**2)}MB / {memory.total // (1024**2)}MB\n"
+        f"💿 Disk: {disk.used // (1024**3)}GB / {disk.total // (1024**3)}GB\n"
+        f"🎯 Status: {'🟢 ACTIVE' if bot_active else '🔴 PAUSED'}",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== STATS ==========
+@dp.message(Command("stats"))
+async def stats_cmd(message: Message):
+    user, chat = await handle_common(message, "stats")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users")
+        users = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM groups")
+        groups = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM uploads")
+        uploads = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM wishes")
+        wishes = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM users WHERE cult_status != 'none'")
+        tempest = c.fetchone()[0] or 0
+    await message.answer(
+        f"{ArtStyle.header('STATISTICS')}\n"
+        f"👥 Users: {users}\n"
+        f"👥 Groups: {groups}\n"
+        f"🌀 Tempest: {tempest}\n"
+        f"📁 Uploads: {uploads}\n"
+        f"✨ Wishes: {wishes}\n"
+        f"🕒 Uptime: {format_uptime(int(time.time() - start_time))}",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== SCAN ==========
+@dp.message(Command("scan"))
+async def scan_cmd(message: Message):
+    user, chat = await handle_common(message, "scan")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    msg = await message.answer("🔍 <b>Scanning database...</b>", parse_mode=ParseMode.HTML)
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users")
+        total_users = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE last_active >= ?", ((datetime.now() - timedelta(days=7)).isoformat(),))
+        active_users = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE cult_status != 'none'")
+        tempest_members = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM uploads")
+        total_uploads = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM command_logs")
+        total_commands = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM groups")
+        total_groups = c.fetchone()[0]
+    await msg.edit_text(
+        f"{ArtStyle.header('DATABASE SCAN')}\n"
+        f"👥 Users: {total_users}\n"
+        f"🟢 Active (7d): {active_users}\n"
+        f"🌀 Tempest: {tempest_members}\n"
+        f"👥 Groups: {total_groups}\n"
+        f"📁 Uploads: {total_uploads}\n"
+        f"🔧 Commands: {total_commands}\n\n"
+        "✅ Scan complete!",
+        parse_mode=ParseMode.HTML
+    )
+
+# ========== USERS ==========
+@dp.message(Command("users"))
+async def users_cmd(message: Message):
+    user, chat = await handle_common(message, "users")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id, first_name, username, uploads, commands FROM users ORDER BY last_active DESC LIMIT 50")
+        users = c.fetchall()
+    text = f"{ArtStyle.header('RECENT USERS')}\n"
+    for uid, name, uname, up, cmd in users:
+        text += f"• {name} (@{uname or 'None'}) - 📁{up} 🔧{cmd}\n"
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+# ========== ADMINS ==========
+@dp.message(Command("admins"))
+async def admins_cmd(message: Message):
+    user, chat = await handle_common(message, "admins")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id, first_name, username FROM users WHERE is_admin = 1")
+        admins = c.fetchall()
+    text = f"{ArtStyle.header('BOT ADMINS')}\n"
+    for uid, name, uname in admins:
+        text += f"👑 {name} (@{uname or 'None'})\n"
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+# ========== BROADCAST ==========
+@dp.message(Command("broadcast"))
+async def broadcast_cmd(message: Message):
+    user, chat = await handle_common(message, "broadcast")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    broadcast_state[user.id] = {"step": 1}
+    await message.answer("📢 <b>Send me text, photo, video, or document to broadcast!</b>\n❌ /cancel to stop", parse_mode=ParseMode.HTML)
+
+@dp.message(F.text | F.photo | F.video | F.document)
+async def handle_broadcast_content(message: Message):
+    user = message.from_user
+    if user.id not in broadcast_state:
+        return
+    if broadcast_state[user.id].get("step") != 1:
+        return
+    broadcast_state.pop(user.id, None)
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE is_banned = 0")
+        users = c.fetchall()
+    status_msg = await message.answer(f"📤 <b>Broadcasting to {len(users)} users...</b>", parse_mode=ParseMode.HTML)
+    success = 0
+    failed = 0
+    for (uid,) in users:
+        try:
+            if message.photo:
+                await bot.send_photo(uid, message.photo[-1].file_id, caption=message.caption or "")
+            elif message.video:
+                await bot.send_video(uid, message.video.file_id, caption=message.caption or "")
+            elif message.document:
+                await bot.send_document(uid, message.document.file_id, caption=message.caption or "")
+            elif message.text:
+                await bot.send_message(uid, message.text)
+            success += 1
+            await asyncio.sleep(0.04)
+        except Exception:
+            failed += 1
+    await status_msg.edit_text(
+        f"{ArtStyle.header('BROADCAST COMPLETE')}\n"
+        f"✅ Sent: {success}\n"
+        f"❌ Failed: {failed}\n"
+        f"📊 Total: {len(users)}",
+        parse_mode=ParseMode.HTML
+    )
+    await send_log(f"📢 Broadcast sent to {success} users by {user.first_name}")
+
+# ========== LAG ==========
+@dp.message(Command("lag"))
+async def lag_cmd(message: Message):
+    user, chat = await handle_common(message, "lag")
+    if not user:
+        return
+    if not await is_admin(user.id):
+        await message.answer("🚫 Admin only")
+        return
+    args = message.text.split()
+    duration = 5
+    if len(args) > 1 and args[1].isdigit():
+        duration = min(int(args[1]), 20)
+    msg = await message.answer("🤖 <b>Initiating glitch simulation...</b>", parse_mode=ParseMode.HTML)
+    glitch_emojis = ["⚡", "🔌", "💥", "🌀", "⚠️", "🔄", "📡", "🔋"]
+    for i in range(duration):
+        emoji = random.choice(glitch_emojis)
+        progress = "▓" * (i + 1) + "░" * (duration - i - 1)
+        glitch_text = f"{emoji} <b>SYSTEM GLITCH</b> {emoji}\n[{progress}]\n⚠️ <b>Lagging:</b> {i+1}/{duration}s"
+        try:
+            await msg.edit_text(glitch_text, parse_mode=ParseMode.HTML)
+        except TelegramBadRequest:
+            pass
+        except Exception:
+            pass
+        await asyncio.sleep(1.2)
+    try:
+        await msg.edit_text(
+            f"{ArtStyle.header('LAG COMPLETE')}\n"
+            f"✅ <b>System recovered!</b>\n"
+            f"⚡ Duration: {duration}s",
+            parse_mode=ParseMode.HTML
+        )
+    except:
+        await message.answer("✅ Lag sequence finished.")
+
+# ========== BACKUP ==========
+@dp.message(Command("backup"))
+async def backup_cmd(message: Message):
+    user, chat = await handle_common(message, "backup")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"backups/backup_{timestamp}.db"
+    shutil.copy2("data/bot.db", backup_file)
+    await message.answer_document(FSInputFile(backup_file), caption=f"💾 Backup {timestamp}")
+    os.remove(backup_file)
+    await send_log(f"💾 Backup created: {timestamp}")
+
+# ========== RESTORE ==========
+@dp.message(Command("rem"))
+async def rem_cmd(message: Message):
+    user, chat = await handle_common(message, "rem")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    pending_restore[user.id] = True
+    await message.answer("💾 <b>Upload the .db file to restore.</b>\n⚠️ This will REPLACE current database!\n❌ /cancel to abort", parse_mode=ParseMode.HTML)
+
+@dp.message(F.document)
+async def handle_restore_file(message: Message):
+    user = message.from_user
+    if user.id not in pending_restore or not pending_restore.get(user.id):
+        return
+    file_name = message.document.file_name or ""
+    if not (file_name.endswith('.db') or file_name.endswith('.sqlite') or file_name.endswith('.sqlite3')):
+        await message.answer("❌ Please upload a .db file!")
+        return
+    pending_restore.pop(user.id, None)
+    msg = await message.answer("⏳ <b>Restoring...</b>", parse_mode=ParseMode.HTML)
+    try:
+        file = await bot.get_file(message.document.file_id)
+        url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+        temp_file = f"temp/restore_{user.id}.db"
+        with open(temp_file, 'wb') as f:
+            f.write(response.content)
+        conn = sqlite3.connect(temp_file)
+        conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        conn.close()
+        shutil.copy2("data/bot.db", f"backups/pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+        shutil.copy2(temp_file, "data/bot.db")
+        os.remove(temp_file)
+        init_db()
+        load_bot_state()
+        await msg.edit_text("✅ <b>Database restored successfully!</b>", parse_mode=ParseMode.HTML)
+        await send_log("💾 Database restored from backup")
+    except Exception as e:
+        await msg.edit_text(f"❌ Restore failed: {str(e)}")
+
+# ========== RESTART ==========
+@dp.message(Command("restart"))
+async def restart_cmd(message: Message):
+    user, chat = await handle_common(message, "restart")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    await message.answer("🔄 <b>Restarting bot...</b>", parse_mode=ParseMode.HTML)
+    save_bot_state()
+    await send_log("🔄 Bot restarting...")
+    os.execv(sys.executable, ['python'] + sys.argv)
+
+# ========== PRO ==========
+@dp.message(Command("pro"))
+async def pro_cmd(message: Message):
+    user, chat = await handle_common(message, "pro")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("👑 Owner only")
+        return
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        await message.answer("Usage: /pro user_id")
+        return
+    target_id = int(args[1])
+    with sqlite3.connect("data/bot.db") as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (target_id,))
+        if c.rowcount == 0:
+            c.execute("INSERT INTO users (user_id, first_name, joined_date, last_active, is_admin) VALUES (?, ?, ?, ?, ?)",
+                     (target_id, f"User_{target_id}", datetime.now().isoformat(), datetime.now().isoformat(), 1))
+        conn.commit()
+    await message.answer(f"✅ User {target_id} is now admin!")
+    await send_log(f"👑 {target_id} promoted to admin")
+
+# ========== QUERY (Execute Code - Owner Only) ==========
+@dp.message(Command("query"))
+async def query_cmd(message: Message):
+    user, chat = await handle_common(message, "query")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("⚡ Usage: /query [python code]")
+        return
+    code = args[1]
+    msg = await message.answer("⚡ <b>Executing code...</b>", parse_mode=ParseMode.HTML)
+    try:
+        # Create sandbox
+        sandbox_globals = {
+            'bot': bot,
+            'dp': dp,
+            'asyncio': asyncio,
+            'sqlite3': sqlite3,
+            'datetime': datetime,
+            'os': os,
+            'sys': sys,
+            'time': time,
+            'random': random,
+            'json': json,
+            'httpx': httpx,
+        }
+        
+        # Execute with timeout
+        result = await asyncio.wait_for(
+            asyncio.to_thread(exec, code, sandbox_globals),
+            timeout=10
+        )
+        
+        # Get output
+        output = sandbox_globals.get('_', 'No output')
+        
+        await msg.edit_text(
+            f"✅ <b>Code executed successfully!</b>\n\n"
+            f"📝 <b>Output:</b>\n<code>{str(output)[:500]}</code>",
+            parse_mode=ParseMode.HTML
+        )
+        await send_log(f"⚡ Code executed by owner: {code[:100]}")
+    except asyncio.TimeoutError:
+        await msg.edit_text("⏰ Code execution timed out!")
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {str(e)}")
+
+# ========== MAINTENANCE ==========
+@dp.message(Command("maintenance"))
+async def maintenance_cmd(message: Message):
+    global maintenance_mode
+    user, chat = await handle_common(message, "maintenance")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    maintenance_mode = not maintenance_mode
+    status = "🔴 ENABLED" if maintenance_mode else "🟢 DISABLED"
+    await message.answer(f"⚙️ Maintenance mode: {status}")
+    await send_log(f"⚙️ Maintenance mode toggled by owner: {status}")
+
+# ========== CLEARLOGS ==========
+@dp.message(Command("clearlogs"))
+async def clearlogs_cmd(message: Message):
+    user, chat = await handle_common(message, "clearlogs")
+    if not user:
+        return
+    if user.id != OWNER_ID:
+        await message.answer("🚫 Owner only")
+        return
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM command_logs")
+            c.execute("DELETE FROM error_logs")
+            conn.commit()
+        await message.answer("🧹 <b>Logs cleared successfully!</b>", parse_mode=ParseMode.HTML)
+        await send_log("🧹 Database logs cleared by owner")
+    except Exception as e:
+        await message.answer(f"❌ Failed to clear logs: {e}")
+
+# ========== AUTO-RECONNECT ==========
+async def keep_alive():
+    global bot_active, last_activity
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await bot.get_me()
+            bot_active = True
+            last_activity = datetime.now()
+        except Exception as e:
+            bot_active = False
+            print(f"⚠️ Connection issue: {e}")
+            try:
+                await bot.session.close()
+                await asyncio.sleep(5)
+                await bot.get_me()
+                bot_active = True
+                print("✅ Reconnected")
+            except:
+                print("❌ Reconnection failed")
+
+# ========== ERROR HANDLER ==========
+@dp.errors()
+async def error_handler(update, exception):
+    print(f"❌ Error: {exception}")
+    try:
+        with sqlite3.connect("data/bot.db") as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO error_logs (timestamp, command, error, traceback) VALUES (?, ?, ?, ?)",
+                     (datetime.now().isoformat(), "unknown", str(exception), traceback.format_exc()))
+            conn.commit()
+    except:
+        pass
+    return True
+
+# ========== MAIN ==========
 async def main():
-    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-    dp.include_router(router)
-    
-    logger.info("⚡ Tempest Guider Bot is starting...")
-    
-    # Delete webhook and start polling
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    print("🚀 STARTING TEMPEST BOT...")
+    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    asyncio.create_task(keep_alive())
+    await send_log("🚀 Bot started successfully!")
+    while True:
+        try:
+            await dp.start_polling(bot)
+        except (TelegramNetworkError, Exception) as e:
+            print(f"⚠️ Connection lost: {e}")
+            print("🔄 Restarting in 10 seconds...")
+            await asyncio.sleep(10)
+            print("🔄 Reconnecting...")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        save_bot_state()
+        print("\n🛑 Bot stopped")
+    except Exception as e:
+        save_bot_state()
+        print(f"❌ Error: {e}")
+        traceback.print_exc()
